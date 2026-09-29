@@ -1,16 +1,23 @@
 # 쇼핑쇼츠 스튜디오 — Claude Code 작업 안내
 
-쿠팡파트너스·네이버 쇼핑커넥트 쇼핑쇼츠를 **합법 소스로만** 만들어 유튜브에 비공개 업로드 → 사람 검수 → 공개하는 맥(Apple Silicon)용 CLI.
-TypeScript + `node:sqlite` + ffmpeg + macOS `say`. UI·문구·주석은 한국어.
+주방·살림 문제해결템을 **정보형**으로 소개하는 쇼핑쇼츠를 **합법 소스로만** 만드는 맥(Apple Silicon)용 CLI다. 흐름은 폰 업로드용 내보내기 → 사람 검수 → 업로드다.
+TypeScript + `node:sqlite` + ffmpeg + 무료 AI 음성(Google Cloud TTS / macOS say). UI·문구·주석은 한국어로 쓴다.
 
 ## 구조
-- `src/cli.ts` — 모든 명령 (`npm run sss -- <명령>`)
-- `src/sources/license.ts` — 소스 라이선스 점검. `BLOCKED_HOSTS`(도우인·틱톡·유튜브 등) 거부
-- `src/script/generate.ts` — 대본 생성(Claude Code 구독), 대가 표기 문구, `[경험 추가]` 자리표시
-- `src/media/` — `tts.ts`(say 합성·타이밍), `subtitles.ts`(ASS), `render.ts`(ffmpeg 인자), `exec.ts`
-- `src/publish/youtube.ts` — OAuth(로컬 루프백), 비공개 업로드, 공개 전환
-- `src/db.ts` — shorts·metrics 테이블, 성과 요약
-- `data/`(DB·영상), `secrets/`(유튜브 토큰), `.env` 는 커밋하지 않습니다.
+- `src/cli.ts`: 모든 명령 (`npm run sss -- <명령>`)
+- `src/product/score.ts`: 제품 선정 4기준(신기함·문제 해결·시즌·카테고리)
+- `src/sources/license.ts`: 소스 라이선스와 역할 점검. `BLOCKED_HOSTS`(도우인·틱톡·유튜브 등)를 거부하고, PRODUCT 역할은 `PRODUCT_KINDS`만 허용한다
+- `src/sources/pexels.ts`: Pexels 스톡 검색과 다운로드(이미 쓴 영상 제외)
+- `src/script/generate.ts`: 대본(훅 5개·공감·해결·CTA), 대가 표기, `[경험 추가]` 자리표시, 가짜 경험 탐지 `fakeExperienceLines`
+- `src/media/`
+  - `tts.ts`: 공급자 google/say, 외부 음성 무음 정렬
+  - `googleTts.ts`
+  - `subtitles.ts`: 한 줄 자막, 위쪽 1/3
+  - `render.ts`: 역할별 컷 계획, 시드 고정 무작위 구간
+- `src/publish/`
+  - `export.ts`: 플랫폼별 캡션과 links.txt
+  - `youtube.ts`: 선택 기능. 비공개 업로드와 공개 전환
+- `src/db.ts`: shorts·metrics(플랫폼별)·channel 테이블. 옛 스키마는 `openDb`가 자동으로 옮긴다
 
 ## 명령
 ```bash
@@ -20,8 +27,11 @@ npm run doctor
 ```
 
 ## 지켜야 할 것
-- **다른 사람이 올린 영상(도우인·틱톡·유튜브·인스타 등)을 내려받거나 재편집하는 기능을 만들지 마세요.** `BLOCKED_HOSTS` 를 줄이거나 `checkClips` 를 우회하는 변경도 금지. 렌더·업로드 전 점검을 유지합니다.
-- **사람 검수 없이 공개하는 경로를 만들지 마세요.** 업로드는 항상 `privacyStatus: "private"`, 공개는 `APPROVED` 상태에서만.
-- 대본이 경험·수치·효능·가격을 지어내지 않도록 한 프롬프트 규칙과 `[경험 추가]` 렌더 차단을 유지하세요.
-- 대가 표기(설명란 첫 줄 + 화면 상단)를 빼지 마세요.
-- AI 비용: Claude 구독으로 운영합니다. API 키 경로를 추가하지 말고 `subscriptionEnv()`·`--tools ""` 를 약화시키지 마세요.
+- **다른 사람이 올린 영상(도우인·틱톡·샤오홍슈·유튜브·인스타 등)을 내려받거나 재편집하는 기능을 만들지 않는다.** `BLOCKED_HOSTS`를 줄이거나 `checkClips`를 우회하는 변경도 하지 않는다.
+- **AI·스톡 소스를 실제 상품(PRODUCT) 장면에 쓰게 하지 않는다.**
+- **가짜 사용 후기를 만들지 않는다.** `경험:` 사실이 없으면 1인칭 사용 경험을 막는 규칙(`SYSTEM` 프롬프트와 `fakeExperienceLines`)과 `[경험 추가]` 렌더 차단을 유지한다.
+- **사람 검수 없이 공개되는 경로를 만들지 않는다.** `posted`와 `publish`는 `APPROVED` 상태에서만 동작하고, API 업로드는 항상 `privacyStatus: "private"`다.
+- 대가 표기(모든 캡션 첫 줄과 화면 상단)를 빼지 않는다.
+- AI 비용: 대본은 Claude 구독(`claude -p`)으로 만든다. API 키 경로를 추가하지 말고, `subscriptionEnv()`와 `--tools ""`를 약화시키지 않는다.
+- 음성은 약관상 상업 이용이 가능한 공식 서비스만 쓴다. 비공식 엔드포인트는 쓰지 않는다.
+- `data/`, `secrets/`, `.env`는 커밋하지 않는다.

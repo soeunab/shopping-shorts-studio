@@ -29,6 +29,13 @@ describe("소스 라이선스 점검", () => {
     expect(checkClip({ file: "a.jpg", kind: "PRODUCT_IMAGE", sourceUrl: "https://www.coupang.com/vp/products/1" })).toHaveLength(1);
   });
 
+  it("실제 상품 장면에는 AI·스톡을 쓸 수 없음", () => {
+    expect(checkClip({ file: "a.png", kind: "AI", role: "PRODUCT" })).toHaveLength(1);
+    expect(checkClip({ file: "a.mp4", kind: "STOCK", role: "PRODUCT", sourceUrl: "https://www.pexels.com/video/1/" })).toHaveLength(1);
+    expect(checkClip({ file: "a.png", kind: "AI", role: "PROBLEM" })).toEqual([]);
+    expect(checkClip({ file: "a.jpg", kind: "PRODUCT_IMAGE", role: "PRODUCT", sourceUrl: "https://www.coupang.com/vp/products/1", proof: "파트너스 제공 이미지" })).toEqual([]);
+  });
+
   it("소스가 없으면 렌더 불가", () => {
     expect(checkClips([])).toHaveLength(1);
   });

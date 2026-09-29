@@ -35,9 +35,25 @@ export const BLOCKED_HOSTS = [
   "ixigua.com",
 ];
 
+/**
+ * 장면 역할 — 대사 구간에 맞춰 배치됩니다.
+ * HOOK: 첫 2초 / PROBLEM: 불편한 상황 / PRODUCT: 실제 상품 / CONTEXT: 분위기·사용 장소
+ */
+export const ROLES = {
+  HOOK: "첫 2초 훅",
+  PROBLEM: "문제 상황",
+  PRODUCT: "실제 상품",
+  CONTEXT: "분위기·장소",
+} as const;
+export type Role = keyof typeof ROLES;
+
+/** 실제 상품 장면에 쓸 수 있는 소스 — 실물과 다른 AI·스톡 이미지를 상품처럼 보여 주지 않기 위함 */
+export const PRODUCT_KINDS: SourceKind[] = ["PRODUCT_IMAGE", "PERMISSION", "OWN"];
+
 export const ClipSchema = z.object({
   file: z.string().min(1),
   kind: z.enum(Object.keys(SOURCE_KINDS) as [SourceKind, ...SourceKind[]]),
+  role: z.enum(Object.keys(ROLES) as [Role, ...Role[]]).default("CONTEXT"),
   /** 출처 URL (스톡·허락·상품 이미지는 필수) */
   sourceUrl: z.string().url().optional(),
   /** 라이선스·허락 근거 (허락 메일 파일 경로, 라이선스 이름 등) */
@@ -45,6 +61,7 @@ export const ClipSchema = z.object({
   note: z.string().optional(),
 });
 export type Clip = z.infer<typeof ClipSchema>;
+export type ClipInput = z.input<typeof ClipSchema>;
 
 function hostOf(url: string): string | null {
   try {
@@ -57,7 +74,8 @@ function hostOf(url: string): string | null {
 const matchesHost = (host: string, list: string[]) => list.some((h) => host === h || host.endsWith(`.${h}`));
 
 /** 문제가 없으면 빈 배열, 있으면 한국어 사유 목록 */
-export function checkClip(clip: Clip): string[] {
+export function checkClip(input: ClipInput): string[] {
+  const clip = ClipSchema.parse(input);
   const problems: string[] = [];
   const host = clip.sourceUrl ? hostOf(clip.sourceUrl) : null;
 
@@ -82,10 +100,13 @@ export function checkClip(clip: Clip): string[] {
     case "AI":
       break;
   }
+  if (clip.role === "PRODUCT" && !PRODUCT_KINDS.includes(clip.kind)) {
+    problems.push(`${clip.file}: '실제 상품' 장면에는 상품 이미지·허락 영상·직접 촬영만 쓸 수 있어요. ${SOURCE_KINDS[clip.kind]}는 PROBLEM·CONTEXT 역할로 등록하세요.`);
+  }
   return problems;
 }
 
-export function checkClips(clips: Clip[]): string[] {
+export function checkClips(clips: ClipInput[]): string[] {
   if (!clips.length) return ["등록된 영상 소스가 없어요. `sss clip add` 로 추가하세요."];
   return clips.flatMap(checkClip);
 }
