@@ -121,6 +121,15 @@ export function openDb(file: string = dbPath()): DatabaseSync {
       PRIMARY KEY (date, platform)
     );
   `);
+  db.exec(`CREATE TABLE IF NOT EXISTS candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL UNIQUE,
+    data TEXT NOT NULL,
+    score REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'NEW',
+    short_id INTEGER,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );`);
   ensureColumn(db, "shorts", "naver_url", "TEXT");
   ensureColumn(db, "shorts", "scores", "TEXT");
   ensureColumn(db, "shorts", "minutes", "INTEGER NOT NULL DEFAULT 0");
@@ -157,7 +166,7 @@ export function listShorts(db: DatabaseSync): ShortRow[] {
   return (db.prepare("SELECT * FROM shorts ORDER BY id DESC").all() as Raw[]).map(toRow);
 }
 
-export type ShortPatch = Partial<Pick<ShortRow, "status" | "script" | "clips" | "videoPath" | "remoteUrl" | "scores" | "minutes" | "aiCredits" | "hookType" | "title" | "keyword" | "postedAt">>;
+export type ShortPatch = Partial<Pick<ShortRow, "status" | "script" | "clips" | "videoPath" | "remoteUrl" | "scores" | "minutes" | "aiCredits" | "hookType" | "title" | "keyword" | "postedAt" | "facts">>;
 
 export function updateShort(db: DatabaseSync, id: number, patch: ShortPatch): ShortRow {
   const sets: string[] = [];
@@ -175,6 +184,7 @@ export function updateShort(db: DatabaseSync, id: number, patch: ShortPatch): Sh
   if (patch.title !== undefined) set("title", patch.title);
   if (patch.keyword !== undefined) set("keyword", patch.keyword);
   if (patch.postedAt !== undefined) set("posted_at", patch.postedAt);
+  if (patch.facts !== undefined) set("facts", JSON.stringify(patch.facts));
   if (sets.length) db.prepare(`UPDATE shorts SET ${sets.join(", ")} WHERE id = ?`).run(...vals, id);
   const row = getShort(db, id);
   if (!row) throw new Error(`쇼츠 #${id} 를 찾을 수 없어요.`);
@@ -357,4 +367,37 @@ export function groupReport(rows: ReportRow[], by: GroupBy): GroupRow[] {
       enough: rs.length >= MIN_SAMPLE,
     }))
     .sort((a, b) => b.medianViews - a.medianViews);
+}
+
+// ─── 상품 후보 (discover) ───────────────────────────────────────────────
+export type CandidateStatus = "NEW" | "PICKED" | "SKIPPED";
+export type CandidateRow<T> = { id: number; key: string; data: T; score: number; status: CandidateStatus; shortId: number | null };
+
+/** 같은 상품이 다시 발굴되면 데이터·점수는 새로, 상태(골랐음·건너뜀)는 유지 */
+export function upsertCandidate<T>(db: DatabaseSync, key: string, data: T, score: number): void {
+  db.prepare(
+    `INSERT INTO candidates (key, data, score) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET data = excluded.data, score = excluded.score, updated_at = datetime('now')`,
+  ).run(key, JSON.stringify(data), score);
+}
+
+function toCandidate<T>(r: Raw): CandidateRow<T> {
+  return { id: Number(r.id), key: String(r.key), data: JSON.parse(String(r.data)) as T, score: Number(r.score), status: r.status as CandidateStatus, shortId: r.short_id === null ? null : Number(r.short_id) };
+}
+
+export function listCandidates<T>(db: DatabaseSync, opts: { status?: CandidateStatus | "ALL"; limit?: number } = {}): CandidateRow<T>[] {
+  const status = opts.status ?? "NEW";
+  const rows = (status === "ALL"
+    ? db.prepare("SELECT * FROM candidates ORDER BY score DESC LIMIT ?").all(opts.limit ?? 30)
+    : db.prepare("SELECT * FROM candidates WHERE status = ? ORDER BY score DESC LIMIT ?").all(status, opts.limit ?? 30)) as Raw[];
+  return rows.map((r) => toCandidate<T>(r));
+}
+
+export function getCandidate<T>(db: DatabaseSync, id: number): CandidateRow<T> | null {
+  const r = db.prepare("SELECT * FROM candidates WHERE id = ?").get(id) as Raw | undefined;
+  return r ? toCandidate<T>(r) : null;
+}
+
+export function setCandidateStatus(db: DatabaseSync, id: number, status: CandidateStatus, shortId?: number): void {
+  db.prepare("UPDATE candidates SET status = ?, short_id = COALESCE(?, short_id), updated_at = datetime('now') WHERE id = ?").run(status, shortId ?? null, id);
 }

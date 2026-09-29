@@ -1,9 +1,9 @@
 # 쇼핑쇼츠 스튜디오
 
-주방·살림 **문제해결템을 정보형으로 소개하는** 15~30초 쇼핑 쇼츠를 **합법 소스로만** 만드는 맥미니(Apple Silicon)용 CLI입니다. 쿠팡파트너스와 네이버 쇼핑커넥트를 씁니다.
+**"요즘 뜨는 생활템·신상템"**(주방·생활·가전·디지털·반려·캠핑 등)을 **정보형으로 소개하는** 15~30초 쇼핑 쇼츠를 **합법 소스로만** 만드는 맥미니(Apple Silicon)용 CLI입니다. 쿠팡파트너스와 네이버 쇼핑커넥트를 씁니다.
 
 ```
-new(제품) → score(선정 4기준) → script(훅 5개·공감·해결·CTA) → clip add(상품 이미지) → ai-clip(Runway)·stock(Pexels)
+discover(후보 발굴) → pick(초안) 또는 new(직접 입력) → score(선정 4기준) → script(훅 5개·공감·해결·CTA) → clip add(상품 이미지) → ai-clip(Runway)·stock(Pexels)
 → render(무료 AI 음성·한 줄 자막·2~3초 컷) → export(플랫폼별 캡션) → approve(사람 검수) → 폰으로 업로드 → posted → track/report
 ```
 
@@ -17,6 +17,39 @@ new(제품) → score(선정 4기준) → script(훅 5개·공감·해결·CTA) 
   - **가짜 내돈내산**도 하지 않습니다. 써 보지 않았는데 "써 보니"라고 말하면 공정위 지침 위반입니다. 이런 문장이 있으면 렌더가 막힙니다.
   - **AI나 스톡 이미지를 실제 상품처럼 보여 주지 않습니다.** 상품 장면에는 실제 상품 이미지만 쓸 수 있습니다.
 - **알아둘 위험**: 직접 촬영 없이 AI 영상, 스톡, AI 음성만 쓰는 채널은 유튜브의 "비진정성 콘텐츠" 판단에 걸리기 쉽습니다. 그래서 유튜브는 서브로만 쓰고, 편마다 컷 순서와 구간이 달라지게 렌더합니다. 본인 녹음(`render --voice`)을 섞으면 이 위험이 크게 줄어듭니다.
+
+## 상품 발굴 (`discover` → `pick`)
+어떤 상품을 만들지 매일 후보로 받아 봅니다. 공식 API와 공개 RSS만 쓰고, 페이지를 긁지 않습니다.
+| 소스 | 무엇 | 키 |
+|---|---|---|
+| 쿠팡파트너스 Open API | 골드박스(오늘의 특가), 분야별 베스트, 검색. 파트너스 링크와 상품 이미지가 함께 옵니다 | `COUPANG_ACCESS_KEY/SECRET_KEY` |
+| 구글 뉴스 RSS | 브랜드 신상품, 사전예약, 출시 예정 소식(제목·링크·날짜만) | 없음 |
+| 네이버 데이터랩 | 후보 검색어의 최근 7일 검색 상승률 | `NAVER_CLIENT_ID/SECRET` (jk-biz와 같음) |
+
+**점수** = 수요(베스트 순위) + 검색 상승률 + 가격대(1만~10만 원 가산, 10만~50만 원은 장바구니 효과로 가산) + 시의성(사전예약, 출시 D±7) + 신기함·문제 해결(Claude 1차 판정). 채널 분야 밖이면 감점합니다. 후보마다 점수 근거가 함께 표시됩니다.
+```bash
+npm run sss -- discover            # 후보 수집 + 점수 (--source coupang|launches, --no-judge)
+npm run sss -- candidates          # 목록
+npm run sss -- pick 12             # 쇼츠 초안 생성: 파트너스 링크·상품 이미지·확인된 사실(가격·사전예약·출시일)
+npm run sss -- fact 3 "스테인리스 재질"   # 상품 페이지에서 확인한 사실 추가
+npm run sss -- skip 13
+```
+- 뉴스 후보는 `pick`할 때 쿠팡에서 같은 상품을 검색해 고릅니다. 검색은 **1시간에 10회 제한**이 있습니다.
+- **사전예약·신상 규칙**: 대사나 제목에 "사전예약" 또는 "출시 예정"을 넣고, 가격에는 "제작 시점 기준"을 붙입니다. 협찬받지 않았으면 "공식 추천·브랜드 협찬" 같은 표현을 쓰지 않습니다. 지키지 않으면 렌더가 막힙니다.
+- 가전·디지털은 수수료율이 낮은 편입니다. 쿠팡파트너스의 카테고리별 수수료표를 확인하세요.
+- 틱톡 크리에이티브센터와 인스타 인기 릴스는 공식 API가 없어 자동화하지 않았습니다. 트렌드 참고용으로 직접 둘러보세요.
+- **매일 아침 자동 발굴(선택)**: `~/Library/LaunchAgents/com.sss.discover.plist`에 아래 예시를 넣고 `launchctl load`로 등록합니다(경로는 본인 것으로 바꾸세요).
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.sss.discover</string>
+  <key>WorkingDirectory</key><string>/Users/me/shopping-shorts-studio</string>
+  <key>ProgramArguments</key><array><string>/opt/homebrew/bin/npm</string><string>run</string><string>sss</string><string>--</string><string>discover</string></array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>7</integer></dict>
+  <key>StandardOutPath</key><string>/tmp/sss-discover.log</string>
+</dict></plist>
+```
 
 ## 트래픽 올리는 제목·태그·설명·자막 (자동 적용 + `seo` 점검)
 쇼츠 트래픽은 **추천 피드**와 **검색** 두 갈래로 들어옵니다. 추천 피드는 첫 2초의 멈춤, 끝까지 보기, 저장·공유로 정해집니다. 검색은 제목, 캡션, 태그, 화면 글자, 말한 단어를 봅니다. 쇼핑쇼츠는 제품명이 아니라 **문제로 검색된다**는 점이 핵심입니다("서랍 정리", "수저 정리").

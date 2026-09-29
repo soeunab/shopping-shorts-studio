@@ -20,6 +20,10 @@ import {
   usedSourceUrls,
   yppProgress,
   groupReport,
+  getCandidate,
+  listCandidates,
+  setCandidateStatus,
+  upsertCandidate,
   GROUP_BY,
   MIN_SAMPLE,
   type GroupBy,
@@ -36,6 +40,7 @@ import { authorize, makePublic, uploadPrivate, videoIdOf } from "./publish/youtu
 import {
   COUPANG_DISCLOSURE,
   fakeExperienceLines,
+  launchProblems,
   generateScript,
   narration,
   ON_SCREEN_DISCLOSURE,
@@ -50,6 +55,10 @@ import { keywordVolumes, naverAdCred, rankKeywords } from "./research/naver.js";
 import { AI_KINDS, checkClips, ClipSchema, ROLES, SOURCE_KINDS, type Clip, type Role, type SourceKind } from "./sources/license.js";
 import { checkProductPrompt, estimateCredits, planAiJobs, productImageDataUri, RunwayClient, USD_PER_CREDIT } from "./ai/runway.js";
 import { download as downloadFile } from "./sources/pexels.js";
+import { COUPANG_CATEGORIES, CoupangClient, coupangCred, type CoupangProduct } from "./research/coupang.js";
+import { naverOpenCred, trendMomentum } from "./research/datalab.js";
+import { fetchLaunchNews, isPreorderTitle } from "./research/launches.js";
+import { dedupe, enrich, extractLaunches, fromCoupang, fromLaunches, scoreCandidate, type Candidate, type LaunchInfo } from "./research/discover.js";
 import { chooseVideos, download, searchPexels } from "./sources/pexels.js";
 
 try {
@@ -60,6 +69,13 @@ const HELP = `쇼핑쇼츠 스튜디오 (합법 소스 전용 · 정보형 쇼�
 
 준비
   doctor                                   환경 점검(ffmpeg·음성·Claude Code·API 키)
+발굴
+  discover [--source all|coupang|launches] [--limit 15] [--no-judge]
+                                           쿠팡 골드박스·카테고리 베스트 + 신상·사전예약 뉴스 → 검색 상승률·가격대·신기함으로 점수
+  candidates [--all]                       후보 목록 (점수 순)
+  pick <후보번호>                          후보 → 쇼츠 초안(파트너스 링크·상품 이미지·확인된 사실 자동)
+  fact <id> "사실"                         상품 페이지에서 확인한 사실 추가
+  skip <후보번호>                          후보 건너뛰기
 제작
   new "<제품명>" [--url 쿠팡링크] [--naver-url 쇼핑커넥트링크] [--category 주방] [--fact "..."]...
   score <id> [--novel] [--solves "해결하는 문제"] [--season] [--category C]   제품 선정 4기준 (옵션 없으면 질문)
@@ -109,6 +125,7 @@ function scriptProblems(s: ShortRow, script: Script): string[] {
   if (ph.length) out.push(`[경험 추가] 가 남아 있어요:\n  ${ph.join("\n  ")}`);
   const fake = fakeExperienceLines(script, s.facts);
   if (fake.length) out.push(`직접 써 보지 않았는데 사용 경험처럼 말하는 문장이 있어요(가짜 후기 금지):\n  ${fake.join("\n  ")}`);
+  out.push(...launchProblems(script, s.facts));
   return out;
 }
 
@@ -139,6 +156,18 @@ function postedAt(at?: string): string {
   throw new Error('--at 은 "2026-10-01T20:00" 또는 "20:00" 형식이에요.');
 }
 
+/** 후보 표 */
+function printCandidates(rows: { id: number; score: number; status: string; data: Candidate }[]): void {
+  console.log("번호  점수  출처     가격        상품 · 근거");
+  for (const r of rows) {
+    const c = r.data;
+    const src = { GOLDBOX: "골드박스", BEST: "베스트", LAUNCH: c.isPreorder ? "사전예약" : "신상" }[c.source];
+    const price = c.price ? `${c.price.toLocaleString()}원` : "-";
+    console.log(`#${String(r.id).padEnd(4)}${r.score.toFixed(1).padStart(5)}  ${src.padEnd(6)} ${price.padStart(10)}  ${c.name.slice(0, 40)}${r.status !== "NEW" ? ` [${r.status}]` : ""}`);
+    if (c.reasons.length) console.log(`${" ".repeat(30)}└ ${c.reasons.join(" · ")}`);
+  }
+}
+
 const num = (v?: string) => (v === undefined ? undefined : Number(v.replaceAll(",", "")));
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -150,6 +179,141 @@ async function main() {
     case "doctor": {
       const checks = await doctor();
       for (const c of checks) console.log(`${c.ok ? "✅" : c.optional ? "➖" : "❌"} ${c.name} — ${c.detail}${!c.ok && c.fix ? `\n   → ${c.fix}` : ""}`);
+      return;
+    }
+    case "discover": {
+      const { values } = parseArgs({ args: rest, options: { source: { type: "string" }, limit: { type: "string" }, "no-judge": { type: "boolean" } } });
+      const source = values.source ?? "all";
+      const limit = Number(values.limit ?? 15);
+      let cands: Candidate[] = [];
+      const cc = coupangCred();
+      if (source === "all" || source === "coupang") {
+        if (!cc) console.log("➖ 쿠팡파트너스 API 키 없음(COUPANG_ACCESS_KEY / COUPANG_SECRET_KEY) — 건너뜀");
+        else {
+          const client = new CoupangClient(cc);
+          try {
+            cands.push(...fromCoupang(await client.goldbox(), "GOLDBOX"));
+          } catch (e) {
+            console.log(`⚠️ 골드박스: ${(e as Error).message}`);
+          }
+          for (const [id, name] of Object.entries(COUPANG_CATEGORIES)) {
+            if (!categoryMatches(name)) continue;
+            try {
+              cands.push(...fromCoupang(await client.bestCategory(Number(id), 20), "BEST"));
+            } catch (e) {
+              console.log(`⚠️ ${name} 베스트: ${(e as Error).message}`);
+            }
+          }
+          console.log(`쿠팡: ${cands.length}개`);
+        }
+      }
+      if (source === "all" || source === "launches") {
+        const news = await fetchLaunchNews();
+        let infos: LaunchInfo[] = [];
+        try {
+          infos = news.length ? await extractLaunches(news, channelCategory()) : [];
+        } catch (e) {
+          // Claude 를 못 쓰면 제목에 '사전예약'이 있는 것만 후보로(분야는 사람이 확인)
+          console.log(`⚠️ 뉴스 정리(Claude) 실패: ${(e as Error).message} — 사전예약 제목만 사용`);
+          infos = news.map((n, index) => ({ index, relevant: isPreorderTitle(n.title), brand: null, product: n.title, category: null, isPreorder: true, launchDate: null }));
+        }
+        const launches = fromLaunches(news, infos);
+        console.log(`신상·사전예약 뉴스: ${news.length}건 → 후보 ${launches.length}개`);
+        cands.push(...launches);
+      }
+      cands = dedupe(cands).map((c) => scoreCandidate(c));
+      let top = cands.filter((c) => c.score > -1).sort((a, b) => b.score - a.score).slice(0, limit * 2);
+      if (!values["no-judge"] && top.length) {
+        try {
+          console.log("신기함·문제 해결 1차 판정 중(Claude 구독)…");
+          top = await enrich(top);
+        } catch (e) {
+          console.log(`⚠️ 1차 판정 건너뜀: ${(e as Error).message}`);
+        }
+      }
+      const nc = naverOpenCred();
+      if (nc && top.some((c) => c.keyword)) {
+        const m = await trendMomentum(top.map((c) => c.keyword!).filter(Boolean), nc);
+        top = top.map((c) => (c.keyword && m[c.keyword] ? { ...c, momentum: m[c.keyword]! } : c));
+      } else if (!nc) console.log("➖ 네이버 데이터랩 키 없음(NAVER_CLIENT_ID / NAVER_CLIENT_SECRET) — 검색 상승률 없이 점수");
+      const final = top.map((c) => scoreCandidate(c)).sort((a, b) => b.score - a.score);
+      for (const c of final) upsertCandidate(db, c.key, c, c.score);
+      if (!final.length) return console.log("후보가 없어요. 키 설정(doctor)과 채널 분야(SSS_ALLOWED)를 확인하세요.");
+      printCandidates(listCandidates<Candidate>(db, { limit }));
+      console.log(`\n고르기: npm run sss -- pick <번호>   건너뛰기: npm run sss -- skip <번호>`);
+      return;
+    }
+    case "candidates": {
+      const { values } = parseArgs({ args: rest, options: { all: { type: "boolean" }, limit: { type: "string" } } });
+      const rows = listCandidates<Candidate>(db, { status: values.all ? "ALL" : "NEW", limit: Number(values.limit ?? 30) });
+      if (!rows.length) return console.log("후보가 없어요: npm run sss -- discover");
+      printCandidates(rows);
+      return;
+    }
+    case "fact": {
+      const s = loadShort(db, need(rest[0]));
+      const fact = rest.slice(1).join(" ").trim();
+      if (!fact) throw new Error('사실을 주세요: fact 1 "스테인리스 재질"  (직접 써 본 경험이면 "경험: ..." 으로)');
+      updateShort(db, s.id, { facts: [...s.facts, fact] });
+      console.log(`✅ #${s.id} 사실 ${s.facts.length + 1}개: ${[...s.facts, fact].join(" / ")}`);
+      return;
+    }
+    case "skip": {
+      const id = need(rest[0]);
+      if (!getCandidate(db, id)) throw new Error(`후보 #${id} 가 없어요.`);
+      setCandidateStatus(db, id, "SKIPPED");
+      console.log(`✅ 후보 #${id} 건너뜀`);
+      return;
+    }
+    case "pick": {
+      const cid = need(rest[0]);
+      const row = getCandidate<Candidate>(db, cid);
+      if (!row) throw new Error(`후보 #${cid} 가 없어요.`);
+      if (row.status === "PICKED") throw new Error(`이미 고른 후보예요 → 쇼츠 #${row.shortId}`);
+      let c = row.data;
+      if (!c.partnerUrl) {
+        // 뉴스 후보: 쿠팡에서 찾아 파트너스 링크·이미지 확보 (검색은 1시간 10회 제한)
+        const cc = coupangCred();
+        if (!cc) throw new Error("쿠팡파트너스 API 키가 있어야 뉴스 후보의 쿠팡 상품을 찾을 수 있어요. 아니면 쿠팡에서 직접 찾아 new --url 로 등록하세요.");
+        const q = c.name;
+        console.log(`쿠팡에서 "${q}" 검색 중(1시간 10회 제한)…`);
+        const found = await new CoupangClient(cc).search(q, 5);
+        if (!found.length) throw new Error("쿠팡에서 찾지 못했어요. 아직 판매 전이면 판매가 열린 뒤 다시 pick 하세요.");
+        found.forEach((p, i) => console.log(`  [${i + 1}] ${p.productName} · ${p.productPrice.toLocaleString()}원`));
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        const n = Number(await ask(rl, "같은 상품 번호(없으면 0) > "));
+        rl.close();
+        const p: CoupangProduct | undefined = found[n - 1];
+        if (!p) return console.log("고르지 않았어요.");
+        c = { ...c, name: p.productName, partnerUrl: p.productUrl, image: p.productImage, price: p.productPrice, isRocket: p.isRocket, category: c.category ?? p.categoryName ?? null };
+      }
+      const date = today();
+      const facts = [
+        c.price ? `가격 ${c.price.toLocaleString()}원 (${date} 기준, 변동 가능)` : null,
+        c.brand ? `브랜드: ${c.brand}` : null,
+        c.isPreorder ? "사전예약 상품" : null,
+        c.launchDate ? `출시·출고 예정일: ${c.launchDate}` : null,
+        c.isRocket ? "로켓배송 상품" : null,
+      ].filter((x): x is string => !!x);
+      const s = createShort(db, { productName: c.name, productUrl: c.partnerUrl ?? undefined, category: c.category ?? undefined, facts });
+      if (c.image) {
+        const dir = path.join(shortDir(s.id), "clips");
+        mkdirSync(dir, { recursive: true });
+        const dest = path.join(dir, `1-product${path.extname(new URL(c.image).pathname) || ".jpg"}`);
+        await downloadFile(c.image, dest);
+        const clip = ClipSchema.parse({ file: dest, kind: "PRODUCT_IMAGE", role: "PRODUCT", sourceUrl: c.partnerUrl ?? c.image, proof: `쿠팡파트너스 Open API 제공 상품 이미지 (${c.key})` });
+        updateShort(db, s.id, { clips: [clip] });
+      }
+      // 1차 판정을 임시 점수로 — 사람이 score 로 확정
+      updateShort(db, s.id, {
+        scores: evaluate({ novel: c.novelty === 2, solves: c.solves, season: (c.momentum ?? 1) > 1.1 || c.isPreorder || !!c.launchDate, categoryMatch: categoryMatches(c.category) }),
+      });
+      setCandidateStatus(db, cid, "PICKED", s.id);
+      console.log(`✅ 쇼츠 #${s.id} ${c.name}
+   링크: ${c.partnerUrl ?? "-"}
+   사실: ${facts.join(" / ") || "-"}
+   상품 페이지에서 확인한 사실 더 넣기: npm run sss -- fact ${s.id} "스테인리스 재질"
+   다음: npm run sss -- score ${s.id} (1차 판정 확인) → script ${s.id} → ai-clip ${s.id}`);
       return;
     }
     case "new": {
@@ -165,7 +329,7 @@ async function main() {
         productName: name,
         productUrl: values.url,
         naverUrl: values["naver-url"],
-        category: values.category ?? channelCategory(),
+        category: values.category,
         program,
         facts: values.fact ?? [],
       });

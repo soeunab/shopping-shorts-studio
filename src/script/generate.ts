@@ -91,7 +91,11 @@ export const SYSTEM = `당신은 한국어 쇼핑 쇼츠(15~30초) 대본 작가
 - titles 3개: [검색 키워드] + [결과·호기심], 40자 이내, 키워드를 앞쪽에. 영상 내용과 다른 낚시 제목, "충격·경악·역대급·무조건" 같은 자극어 금지.
 - hashtags: broad 1개(예: #살림템), mid 2개(예: #주방정리 #서랍정리), specific 1~2개(예: #수저정리). 관련 없는 인기 태그 금지, #쇼츠 불필요.
 - cta 는 "필요할 때 보게 저장해 두고, 필요한 사람에게 보내 주세요" 류(저장·공유 유도). 링크 안내는 넣지 마세요(플랫폼마다 다름).
-- commentKeyword 는 제품을 대표하는 2~4글자 한국어 단어.`;
+- commentKeyword 는 제품을 대표하는 2~4글자 한국어 단어.
+신상품·사전예약 규칙:
+- 확인된 사실에 "사전예약" 또는 "출시 예정"이 있으면 대사(해결 또는 마무리)와 제목에 그 말과 출고·출시일(사실에 있을 때만)을 넣으세요.
+- 가격은 사실에 있을 때만, "영상 제작 시점 기준" 을 붙여서. 할인율·최저가 단정 금지.
+- 브랜드가 협찬·추천·보증한 것처럼 말하지 마세요("공식 추천", "브랜드 협찬" 등). 브랜드명은 사실대로만.`;
 
 export function buildPrompt(short: Pick<ShortRow, "productName" | "category" | "facts">, solves?: string | null): string {
   const facts = short.facts.length ? short.facts.map((f) => `- ${f}`).join("\n") : `- (없음: 제품명 외에는 모두 ${PLACEHOLDER} 로 두세요)`;
@@ -137,6 +141,29 @@ export function narrationLines(script: Script): string[] {
 
 export function placeholdersIn(script: Script): string[] {
   return narrationLines(script).filter((t) => t.includes(PLACEHOLDER));
+}
+
+/** 사전예약·출시 예정 상품인지 (pick 이 facts 에 넣는 표시) */
+export const PREORDER_FACT = /사전\s?(예약|판매|주문)|출시\s?예정/;
+/** 브랜드가 협찬·보증한 것처럼 보이는 표현 — 사실이 아니면 기만 광고 */
+const ENDORSEMENT = /(공식\s?(추천|인증|파트너|협찬)|브랜드\s?(추천|협찬|제공)|협찬\s?받|제공\s?받)/;
+
+/**
+ * 신상·사전예약 규칙: 사전예약 상품이면 대사나 제목에 "사전예약/출시 예정"을 밝혀야 하고,
+ * 가격을 말하면 "제작 시점 기준"을 붙여야 합니다(가격·출고일이 바뀔 수 있음).
+ * 협찬받지 않았는데 협찬·공식 추천처럼 말하는 것도 막습니다.
+ */
+export function launchProblems(script: Script, facts: string[]): string[] {
+  const out: string[] = [];
+  const all = [...narrationLines(script), ...script.titles, script.onScreenTitle ?? ""];
+  if (facts.some((f) => PREORDER_FACT.test(f)) && !all.some((t) => PREORDER_FACT.test(t))) {
+    out.push("사전예약·출시 예정 상품인데 대사나 제목에 '사전예약' 또는 '출시 예정'이 없어요(바로 살 수 있는 것처럼 보이면 안 됨).");
+  }
+  const priceLine = all.find((t) => /\d[\d,]*\s?(원|만\s?원)/.test(t) && !/(기준|변동)/.test(t));
+  if (priceLine) out.push(`가격을 말할 땐 '제작 시점 기준, 변동 가능'을 붙이세요: "${priceLine}"`);
+  const endorse = all.find((t) => ENDORSEMENT.test(t));
+  if (endorse && !facts.some((f) => /협찬|제공받/.test(f))) out.push(`브랜드가 협찬·보증한 것처럼 보이는 표현이 있어요: "${endorse}"`);
+  return out;
 }
 
 const FIRST_PERSON = /(써\s?보니|써\s?봤|써\s?본|내돈내산|직접\s?(사용|써|사서)|사용해\s?보니|사용해\s?봤|제가\s?(쓰|써|사))/;

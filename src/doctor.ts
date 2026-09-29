@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { claudeBin } from "./llm/claudeCode.js";
 import { run } from "./media/exec.js";
 import { pickSayVoice, providerFromEnv } from "./media/tts.js";
-import { channelCategory } from "./product/score.js";
+import { allowedCategories, channelCategory } from "./product/score.js";
 
 /** optional: 없어도 되는 항목(❌ 대신 ➖ 로 표시) */
 type Check = { name: string; ok: boolean; detail: string; fix?: string; optional?: boolean };
@@ -66,7 +66,20 @@ export async function doctor(): Promise<Check[]> {
     fix: "npm run setup:runway-mcp",
     optional: true,
   });
-  checks.push({ name: "채널 카테고리", ok: true, detail: channelCategory() });
+  checks.push({
+    name: "발굴: 쿠팡파트너스 API",
+    ok: !!(process.env.COUPANG_ACCESS_KEY && process.env.COUPANG_SECRET_KEY),
+    detail: "COUPANG_ACCESS_KEY / COUPANG_SECRET_KEY (골드박스·베스트·검색·링크)",
+    fix: "파트너스 센터 → 추가 기능 → Open API (발급 조건 확인)",
+    optional: true,
+  });
+  checks.push({
+    name: "발굴: 네이버 데이터랩",
+    ok: !!(process.env.NAVER_CLIENT_ID && process.env.NAVER_CLIENT_SECRET),
+    detail: "NAVER_CLIENT_ID / NAVER_CLIENT_SECRET (검색 상승률, jk-biz 와 같은 값)",
+    optional: true,
+  });
+  checks.push({ name: "채널 콘셉트", ok: true, detail: `${channelCategory()} · 분야 ${allowedCategories().join("·")}` });
 
   const bin = claudeBin();
   checks.push({ name: "Claude Code", ok: !!bin, detail: bin ?? "없음", fix: "Claude Code 설치 후 claude 실행 → /login (구독 계정)" });

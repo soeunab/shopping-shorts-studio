@@ -1,11 +1,17 @@
 # 쇼핑쇼츠 스튜디오 — Claude Code 작업 안내
 
-주방·살림 문제해결템을 **정보형**으로 소개하는 쇼핑쇼츠를 **합법 소스로만** 만드는 맥(Apple Silicon)용 CLI다. 흐름은 폰 업로드용 내보내기 → 사람 검수 → 업로드다.
+"요즘 뜨는 생활템·신상템"(주방·생활·가전·디지털·반려·캠핑 등)을 **정보형**으로 소개하는 쇼핑쇼츠를 **합법 소스로만** 만드는 맥(Apple Silicon)용 CLI다. 흐름은 폰 업로드용 내보내기 → 사람 검수 → 업로드다.
 TypeScript + `node:sqlite` + ffmpeg + 무료 AI 음성(Google Cloud TTS / macOS say). UI·문구·주석은 한국어로 쓴다.
 
 ## 구조
 - `src/cli.ts`: 모든 명령 (`npm run sss -- <명령>`)
-- `src/product/score.ts`: 제품 선정 4기준(신기함·문제 해결·시즌·카테고리)
+- `src/product/score.ts`: 제품 선정 4기준(신기함·문제 해결·시즌·허용 분야 `allowedCategories`)
+- `src/research/`: 상품 발굴
+  - `coupang.ts`: 쿠팡파트너스 Open API(HMAC). 검색은 1시간 10회 제한이라 `pick`할 때만 쓴다
+  - `datalab.ts`: 네이버 데이터랩 검색어 트렌드(API HUB), 7일 상승률
+  - `launches.ts`: 구글 뉴스 RSS. 제목·링크·날짜만 쓰고 본문은 저장하지 않는다
+  - `discover.ts`: 후보 합치기, 중복 제거, 점수와 근거, Claude 1차 판정
+  - `naver.ts`: 검색광고 키워드 검색량
 - `src/sources/license.ts`: 소스 라이선스와 역할 점검. `BLOCKED_HOSTS`(도우인·틱톡·유튜브 등)를 거부하고, PRODUCT 역할은 `PRODUCT_KINDS`만 허용한다
 - `src/sources/pexels.ts`: Pexels 스톡 검색과 다운로드(이미 쓴 영상 제외)
 - `src/ai/runway.ts`: Runway API(공식 MCP 서버와 같은 API)
@@ -15,7 +21,6 @@ TypeScript + `node:sqlite` + ffmpeg + 무료 AI 음성(Google Cloud TTS / macOS 
 - `.mcp.json` + `scripts/setup-runway-mcp.sh`: 공식 Runway MCP(vendor/, 커밋하지 않음)
 - `src/script/generate.ts`: 대본(훅 5개·공감·해결·CTA), 대가 표기, `[경험 추가]` 자리표시, 가짜 경험 탐지 `fakeExperienceLines`
 - `src/script/seo.ts`: 제목·태그·키워드·자막 점검 `lintMetadata`(경고만, 차단 없음)
-- `src/research/naver.ts`: 네이버 검색광고 API 월간 검색량(jk-biz `naverSearchAdKeywords` 이식)
 - `src/media/`
   - `tts.ts`: 공급자 google/say, 외부 음성 무음 정렬
   - `googleTts.ts`
@@ -43,5 +48,7 @@ npm run doctor
 - 대가 표기(모든 캡션 첫 부분과 화면 상단)를 빼지 않는다. 인스타·틱톡 첫 줄의 `[광고]`와 그다음 줄의 쿠팡 파트너스 문구를 유지한다.
 - 트래픽 규칙에 낚시 제목, 관련 없는 인기 태그, 키워드 과다 삽입을 넣지 않는다(`CLICKBAIT` 점검 유지). 검증 안 된 통설은 규칙으로 박지 말고 `report --by`로 비교한다.
 - AI 비용: 대본은 Claude 구독(`claude -p`)으로 만든다. API 키 경로를 추가하지 말고, `subscriptionEnv()`와 `--tools ""`를 약화시키지 않는다.
+- 상품 발굴은 공식 API와 공개 RSS만 쓴다. 쿠팡·네이버·인스타·틱톡 페이지를 긁는 크롤러를 만들지 않고, 뉴스 기사 본문도 저장하지 않는다.
+- 신상·사전예약 상품은 `launchProblems` 규칙을 유지한다. 사전예약이나 출시 예정임을 밝히고, 가격에는 제작 시점 기준을 붙이고, 협찬·보증처럼 보이는 표현을 막는다. `pick`이 넣는 사실은 API로 확인된 값뿐이다.
 - 음성은 약관상 상업 이용이 가능한 공식 서비스만 쓴다. 비공식 엔드포인트는 쓰지 않는다.
 - `data/`, `secrets/`, `.env`는 커밋하지 않는다.
