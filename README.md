@@ -105,6 +105,29 @@ npm run doctor
   - AI 장면이 있으면 각 플랫폼의 AI 콘텐츠 표시를 켭니다.
   - 넣는 상품 이미지의 사용 권리는 제휴 프로그램 약관과 Runway 약관을 확인하세요.
 
+### AI 영상 도구 선택: Runway vs Higgsfield
+| | Runway | Higgsfield |
+|---|---|---|
+| 연결 | `ai-clip`(API, 자동) + 공식 MCP | Claude 커넥터(OAuth, 키 불필요, **설정이 가장 쉬움**) |
+| 모델 | gen4_turbo·gen4.5·seedance2·veo3.1 등 | 30여 종(Kling·Seedance·Veo·Minimax 등), 카메라 프리셋 |
+| 비용(한 달 60클립 기준) | API 약 **$22** (5초 상품 컷 약 $0.25) | 구독 Starter 월 $19(약 15편 분량)로는 부족해 **Plus 월 $47~59** 필요, 크레딧 이월 안 됨. 별도 API는 5초 약 $0.39 |
+| 이 CLI 연동 | 자동(규칙 점검·비용 기록) | `ai-brief`로 요청서를 만들어 대화로 생성하고 `ai-import`로 점검·등록 |
+
+**추천**: 기본 생산은 Runway API(`ai-clip`)로 합니다. 처음에는 $10만 충전하세요. 10편쯤 올린 뒤 **3초 이탈률**이 문제로 보이면, Higgsfield Starter를 한 달 써서 **첫 2초 상품 컷**만 만들어 봅니다. 결과는 `report --by provider`로 비교해 계속 쓸지 정합니다. 결제 전에 두 서비스의 공식 가격 페이지를 확인하세요(가격은 자주 바뀝니다).
+
+### Higgsfield MCP (Claude에서 대화로 생성)
+- **Claude 앱**: 설정 → 커넥터 → 사용자 지정 커넥터 추가 → `https://mcp.higgsfield.ai/mcp` → Higgsfield 계정으로 로그인. 유료 플랜이 있어야 쓸 수 있습니다.
+- **Claude Code**: 이 폴더의 `.mcp.json`에 이미 들어 있습니다. `claude` 실행 → `/mcp`에서 higgsfield 로그인. 다른 폴더에서는 `claude mcp add --transport http higgsfield https://mcp.higgsfield.ai/mcp`로 추가합니다.
+- **쓰는 순서**
+```bash
+npm run sss -- ai-brief 3 --for higgsfield     # 규칙과 컷별 프롬프트가 담긴 요청서 → Claude 대화창에 붙여 넣기(상품 이미지 첨부)
+# Claude 가 Higgsfield 로 생성·저장하면, 컷마다 등록:
+npm run sss -- ai-import 3 ~/Downloads/hf-1.mp4 --role PRODUCT --from 1 \
+  --prompt "Gentle camera orbit around the exact product shown, clean neutral background" \
+  --provider higgsfield --model kling-2.6 --usd 0.39
+```
+- **금지**: Higgsfield의 아바타·UGC·마케팅 스튜디오처럼 **사람이 제품을 들고 소개·추천·후기하는 영상**은 가짜 후기라 쓸 수 없습니다. `ai-import`가 프롬프트를 보고 거부하고, 상품 컷은 원본 상품 이미지(`--from`)가 없으면 등록되지 않습니다.
+
 ### Runway MCP (Claude Code에서 대화로 생성)
 ```bash
 npm run setup:runway-mcp            # 공식 runwayml/runway-api-mcp-server 를 vendor/ 에 받아 빌드

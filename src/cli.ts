@@ -55,6 +55,7 @@ import { keywordVolumes, naverAdCred, rankKeywords } from "./research/naver.js";
 import { AI_KINDS, checkClips, ClipSchema, ROLES, SOURCE_KINDS, type Clip, type Role, type SourceKind } from "./sources/license.js";
 import { checkProductPrompt, estimateCredits, planAiJobs, productImageDataUri, RunwayClient, USD_PER_CREDIT } from "./ai/runway.js";
 import { download as downloadFile } from "./sources/pexels.js";
+import { buildBrief } from "./ai/brief.js";
 import { COUPANG_CATEGORIES, CoupangClient, coupangCred, type CoupangProduct } from "./research/coupang.js";
 import { naverOpenCred, trendMomentum } from "./research/datalab.js";
 import { fetchLaunchNews, isPreorderTitle } from "./research/launches.js";
@@ -83,6 +84,9 @@ const HELP = `쇼핑쇼츠 스튜디오 (합법 소스 전용 · 정보형 쇼�
   keywords <id> [--pick "검색어"]          네이버 월간 검색량으로 대표 검색 키워드 고르기 (검색광고 API 키 필요)
   seo <id>                                 제목·태그·키워드·자막 점검
   stock <id> "<영어 검색어>" [--role PROBLEM|CONTEXT|HOOK] [--count 3]     Pexels 무료 스톡 자동 받기
+  ai-brief <id> [--for higgsfield|runway]  Claude 대화창(Higgsfield·Runway MCP)에 붙여 넣을 생성 요청서(규칙+장면별 프롬프트)
+  ai-import <id> <파일> --role PRODUCT|PROBLEM|CONTEXT|HOOK --prompt "..." --provider higgsfield [--model M] [--usd 0.4] [--from <상품 이미지 clip 번호>]
+                                           대화로 만든 AI 영상을 규칙·출처 점검 후 등록
   ai-clip <id> [--products 2] [--no-problem] [--context] [--motion "camera ..."] [--dry-run] [--yes]
                                            Runway 로 AI 장면 생성: 실제 상품 이미지→카메라 모션, 공감 줄→상황 영상 (생성 전 비용 확인)
   clip add <id> <파일> --kind ${Object.keys(SOURCE_KINDS).join("|")} --role ${Object.keys(ROLES).join("|")} [--source URL] [--proof 근거]
@@ -96,7 +100,7 @@ const HELP = `쇼핑쇼츠 스튜디오 (합법 소스 전용 · 정보형 쇼�
 기록
   track <id> --platform ${PLATFORMS.join("|")} [--views N] [--clicks N] [--orders N] [--commission 원] [--source S] [--minutes 제작분]
   track-channel --platform YOUTUBE|INSTAGRAM|... [--followers N] [--views90 N]
-  report [--by hook|keyword|hour]          성과·시간당 수익·AI 비용·수익창출 조건 진행률 / 훅 유형·키워드·시간대별 비교`;
+  report [--by hook|keyword|hour|provider] 성과·시간당 수익·AI 비용·수익창출 조건 진행률 / 훅 유형·키워드·시간대·AI 도구별 비교`;
 
 function need(id: string | undefined): number {
   const n = Number(id);
@@ -444,6 +448,53 @@ async function main() {
       updateShort(db, s.id, { clips });
       return;
     }
+    case "ai-brief": {
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { for: { type: "string" }, products: { type: "string" } } });
+      const s = loadShort(db, need(positionals[0]));
+      const target = values.for === "runway" ? "runway" : "higgsfield";
+      const images = (s.clips as Clip[]).map((c, i) => ({ c, n: i + 1 })).filter(({ c }) => c.kind === "PRODUCT_IMAGE");
+      if (!images.length) console.log("⚠️ 실제 상품 이미지(PRODUCT_IMAGE)가 없어 상품 컷은 빠집니다. clip add ... --kind PRODUCT_IMAGE --role PRODUCT 로 먼저 추가하세요.\n");
+      console.log(buildBrief({ shortId: s.id, productName: s.productName, script: currentScript(s), productImages: images.map(({ c }) => c.file), target, productShots: Number(values.products ?? 2) }));
+      if (images.length) console.log(`\n(상품 이미지 clip 번호: ${images.map(({ n, c }) => `${n}=${path.basename(c.file)}`).join(", ")} → ai-import 의 --from 에 사용)`);
+      return;
+    }
+    case "ai-import": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { role: { type: "string" }, prompt: { type: "string" }, provider: { type: "string" }, model: { type: "string" }, usd: { type: "string" }, from: { type: "string" } },
+      });
+      const s = loadShort(db, need(positionals[0]));
+      const src = positionals[1];
+      if (!src || !existsSync(src)) throw new Error("AI 로 만든 영상 파일 경로를 주세요.");
+      const role = (values.role?.toUpperCase() ?? "") as Role;
+      if (!(role in ROLES)) throw new Error(`--role 은 ${Object.keys(ROLES).join(", ")} 중 하나예요.`);
+      if (!values.prompt?.trim()) throw new Error("--prompt 에 생성할 때 쓴 최종 프롬프트를 적어 주세요(규칙 점검·기록용).");
+      const clips = s.clips as Clip[];
+      let base: Clip | undefined;
+      if (role === "PRODUCT") {
+        base = clips[Number(values.from) - 1];
+        if (!values.from || !base || base.kind !== "PRODUCT_IMAGE") {
+          throw new Error("상품 컷은 --from 에 원본 실제 상품 이미지의 clip 번호가 필요해요(clip check 로 확인). 원본 없이 AI 로 만든 상품 장면은 쓸 수 없어요.");
+        }
+      }
+      const provider = values.provider?.trim().toLowerCase() || "other";
+      const dir = path.join(shortDir(s.id), "clips");
+      mkdirSync(dir, { recursive: true });
+      const dest = path.join(dir, `${clips.length + 1}-${provider}-${role.toLowerCase()}${path.extname(src) || ".mp4"}`);
+      const clip = ClipSchema.parse(
+        base
+          ? { file: dest, kind: "AI_FROM_PRODUCT", role, sourceUrl: base.sourceUrl, proof: base.proof, derivedFrom: base.file, prompt: values.prompt, model: values.model, provider }
+          : { file: dest, kind: "AI", role, prompt: values.prompt, model: values.model, provider },
+      );
+      const problems = checkClips([clip]);
+      if (problems.length) throw new Error(problems.join("\n"));
+      copyFileSync(src, dest);
+      const usd = num(values.usd) ?? 0;
+      updateShort(db, s.id, { clips: [...clips, clip], aiUsd: +(s.aiUsd + usd).toFixed(4) });
+      console.log(`✅ ${ROLES[role]} · ${provider}${values.model ? `/${values.model}` : ""} 등록: ${dest}${usd ? ` · $${usd}` : ""}${base ? "\n   상품 모양·색·크기가 원본 이미지와 같은지 꼭 확인하세요." : ""}`);
+      return;
+    }
     case "ai-clip": {
       const { values, positionals } = parseArgs({
         args: rest,
@@ -498,12 +549,12 @@ async function main() {
         spent += (estimateCredits([j]) ?? 0);
         const clip = ClipSchema.parse(
           base
-            ? { file: dest, kind: "AI_FROM_PRODUCT", role: "PRODUCT", sourceUrl: base.sourceUrl, proof: base.proof, derivedFrom: base.file, prompt: j.prompt, model: j.model, note: `Runway ${taskId}` }
-            : { file: dest, kind: "AI", role: j.role, prompt: j.prompt, model: j.model, note: `Runway ${taskId}` },
+            ? { file: dest, kind: "AI_FROM_PRODUCT", role: "PRODUCT", sourceUrl: base.sourceUrl, proof: base.proof, derivedFrom: base.file, prompt: j.prompt, model: j.model, provider: "runway", note: `Runway ${taskId}` }
+            : { file: dest, kind: "AI", role: j.role, prompt: j.prompt, model: j.model, provider: "runway", note: `Runway ${taskId}` },
         );
         added.push(clip);
         // 한 편씩 저장 — 중간에 실패해도 이미 만든 장면과 비용 기록은 남깁니다.
-        updateShort(db, s.id, { clips: [...clips, ...added], aiCredits: s.aiCredits + spent });
+        updateShort(db, s.id, { clips: [...clips, ...added], aiUsd: +(s.aiUsd + spent * USD_PER_CREDIT).toFixed(4) });
         console.log(`  ✅ ${dest}`);
       }
       console.log(`✅ ${added.length}개 추가 · 약 ${spent} 크레딧($${(spent * USD_PER_CREDIT).toFixed(2)}) — 상품 영상은 모양이 원본과 같은지 꼭 확인하세요. 다음: clip check ${s.id} → render ${s.id}`);
@@ -706,7 +757,7 @@ async function main() {
         if (!(GROUP_BY as readonly string[]).includes(values.by)) throw new Error(`--by 는 ${GROUP_BY.join(", ")} 중 하나예요.`);
         const groups = groupReport(rows, values.by as GroupBy);
         if (!groups.length) return console.log("공개된 쇼츠가 없어요(posted 로 기록).");
-        console.log(`${{ hook: "훅 유형", keyword: "대표 키워드", hour: "올린 시간대" }[values.by as GroupBy]}별 (공개된 쇼츠, 조회수 중앙값 순)`);
+        console.log(`${{ hook: "훅 유형", keyword: "대표 키워드", hour: "올린 시간대", provider: "상품 컷 AI 도구" }[values.by as GroupBy]}별 (공개된 쇼츠, 조회수 중앙값 순)`);
         for (const g of groups) {
           console.log(`  ${g.group.padEnd(12)} ${String(g.count).padStart(3)}편  중앙값 ${g.medianViews.toLocaleString().padStart(9)}  수수료 ${g.commission.toLocaleString()}원${g.enough ? "" : `  (표본 부족 <${MIN_SAMPLE}편)`}`);
         }

@@ -28,8 +28,10 @@ export type ShortRow = {
   remoteUrl: string | null;
   /** 제작에 쓴 시간(분) — 시간당 수익 계산용 */
   minutes: number;
-  /** AI 영상 생성에 쓴 크레딧(Runway 1크레딧 = $0.01) */
+  /** (옛 기록) Runway 크레딧 — aiUsd 로 옮겨짐 */
   aiCredits: number;
+  /** AI 영상 생성 비용(달러, 모든 도구 합) */
+  aiUsd: number;
   /** 성과 비교용: 고른 훅 유형·제목·대표 검색 키워드·올린 시각 */
   hookType: string | null;
   title: string | null;
@@ -66,6 +68,7 @@ function toRow(r: Raw): ShortRow {
     remoteUrl: (r.remote_url as string | null) ?? null,
     minutes: Number(r.minutes ?? 0),
     aiCredits: Number(r.ai_credits ?? 0),
+    aiUsd: Number(r.ai_usd ?? 0),
     hookType: (r.hook_type as string | null) ?? null,
     title: (r.title as string | null) ?? null,
     keyword: (r.keyword as string | null) ?? null,
@@ -78,8 +81,11 @@ function columns(db: DatabaseSync, table: string): string[] {
   return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
 }
 
-function ensureColumn(db: DatabaseSync, table: string, column: string, ddl: string): void {
-  if (!columns(db, table).includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+/** 열이 없으면 추가하고 true(방금 추가됨)를 돌려줍니다. */
+function ensureColumn(db: DatabaseSync, table: string, column: string, ddl: string): boolean {
+  if (columns(db, table).includes(column)) return false;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+  return true;
 }
 
 const METRICS_DDL = `
@@ -134,6 +140,8 @@ export function openDb(file: string = dbPath()): DatabaseSync {
   ensureColumn(db, "shorts", "scores", "TEXT");
   ensureColumn(db, "shorts", "minutes", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "shorts", "ai_credits", "INTEGER NOT NULL DEFAULT 0");
+  // AI 비용을 도구와 상관없이 달러로 — 예전 Runway 크레딧(1크레딧 = $0.01)은 한 번 옮김
+  if (ensureColumn(db, "shorts", "ai_usd", "REAL NOT NULL DEFAULT 0")) db.exec("UPDATE shorts SET ai_usd = ai_credits * 0.01 WHERE ai_credits > 0");
   for (const c of ["hook_type", "title", "keyword", "posted_at"]) ensureColumn(db, "shorts", c, "TEXT");
 
   // 초기 버전 metrics(플랫폼 구분 없음) → 플랫폼별 기록으로 옮김
@@ -166,7 +174,7 @@ export function listShorts(db: DatabaseSync): ShortRow[] {
   return (db.prepare("SELECT * FROM shorts ORDER BY id DESC").all() as Raw[]).map(toRow);
 }
 
-export type ShortPatch = Partial<Pick<ShortRow, "status" | "script" | "clips" | "videoPath" | "remoteUrl" | "scores" | "minutes" | "aiCredits" | "hookType" | "title" | "keyword" | "postedAt" | "facts">>;
+export type ShortPatch = Partial<Pick<ShortRow, "status" | "script" | "clips" | "videoPath" | "remoteUrl" | "scores" | "minutes" | "aiCredits" | "aiUsd" | "hookType" | "title" | "keyword" | "postedAt" | "facts">>;
 
 export function updateShort(db: DatabaseSync, id: number, patch: ShortPatch): ShortRow {
   const sets: string[] = [];
@@ -180,6 +188,7 @@ export function updateShort(db: DatabaseSync, id: number, patch: ShortPatch): Sh
   if (patch.remoteUrl !== undefined) set("remote_url", patch.remoteUrl);
   if (patch.minutes !== undefined) set("minutes", patch.minutes);
   if (patch.aiCredits !== undefined) set("ai_credits", patch.aiCredits);
+  if (patch.aiUsd !== undefined) set("ai_usd", patch.aiUsd);
   if (patch.hookType !== undefined) set("hook_type", patch.hookType);
   if (patch.title !== undefined) set("title", patch.title);
   if (patch.keyword !== undefined) set("keyword", patch.keyword);
@@ -255,13 +264,16 @@ export type ReportRow = {
   status: string;
   minutes: number;
   aiCredits: number;
+  aiUsd: number;
+  /** 상품 컷을 만든 AI 도구 (없으면 null) */
+  provider: string | null;
   hookType: string | null;
   keyword: string | null;
   postedAt: string | null; views: number; clicks: number; orders: number; commission: number; byPlatform: Partial<Record<Platform, number>> };
 
 /** 쇼츠별 플랫폼 최신 기록을 합산 */
 export function report(db: DatabaseSync): ReportRow[] {
-  const shorts = db.prepare("SELECT id, product_name, status, minutes, ai_credits, hook_type, keyword, posted_at FROM shorts ORDER BY id").all() as Raw[];
+  const shorts = db.prepare("SELECT id, product_name, status, minutes, ai_credits, ai_usd, clips, hook_type, keyword, posted_at FROM shorts ORDER BY id").all() as Raw[];
   const latest = db
     .prepare(
       `SELECT m.* FROM metrics m
@@ -279,6 +291,8 @@ export function report(db: DatabaseSync): ReportRow[] {
       status: String(s.status),
       minutes: Number(s.minutes ?? 0),
       aiCredits: Number(s.ai_credits ?? 0),
+      aiUsd: Number(s.ai_usd ?? 0),
+      provider: providerOf(parseJson<{ kind?: string; provider?: string }[]>(s.clips, [])),
       hookType: (s.hook_type as string | null) ?? null,
       keyword: (s.keyword as string | null) ?? null,
       postedAt: (s.posted_at as string | null) ?? null,
@@ -322,7 +336,7 @@ export function summarize(rows: ReportRow[]): Summary {
     perShort: pub.length ? Math.round(commission / pub.length) : 0,
     hours,
     perHour: hours ? Math.round(commission / hours) : 0,
-    aiUsd: rows.reduce((a, r) => a + r.aiCredits, 0) * 0.01,
+    aiUsd: rows.reduce((a, r) => a + r.aiUsd, 0),
   };
 }
 
@@ -334,7 +348,12 @@ export function yppProgress(ch: ChannelRow[], target: { subs?: number; shortsVie
   return { subs: ratio(yt?.followers ?? 0, target.subs), views: ratio(yt?.views90d ?? 0, target.shortsViews90d) };
 }
 
-export const GROUP_BY = ["hook", "keyword", "hour"] as const;
+/** 상품 컷(AI_FROM_PRODUCT)을 만든 도구, 없으면 다른 AI 장면의 도구 */
+export function providerOf(clips: { kind?: string; provider?: string }[]): string | null {
+  return clips.find((c) => c.kind === "AI_FROM_PRODUCT" && c.provider)?.provider ?? clips.find((c) => c.kind === "AI" && c.provider)?.provider ?? null;
+}
+
+export const GROUP_BY = ["hook", "keyword", "hour", "provider"] as const;
 export type GroupBy = (typeof GROUP_BY)[number];
 /** 그룹 비교에서 이보다 적은 편수는 우연일 가능성이 커서 "표본 부족"으로 표시 */
 export const MIN_SAMPLE = 5;
@@ -353,6 +372,7 @@ export function groupReport(rows: ReportRow[], by: GroupBy): GroupRow[] {
   const key = (r: ReportRow): string => {
     if (by === "hook") return r.hookType ?? "(미기록)";
     if (by === "keyword") return r.keyword ?? "(미기록)";
+    if (by === "provider") return r.provider ?? "(AI 없음)";
     const h = r.postedAt?.match(/T(\d{2})/)?.[1];
     return h ? `${h}시` : "(미기록)";
   };

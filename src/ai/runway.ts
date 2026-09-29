@@ -19,44 +19,9 @@ export const I2V_MODEL = () => process.env.SSS_RUNWAY_I2V_MODEL?.trim() || "gen4
 export const T2V_MODEL = () => process.env.SSS_RUNWAY_T2V_MODEL?.trim() || "gen4.5";
 export const RATIO = "720:1280";
 
-/**
- * 실제 상품 이미지로 만드는 영상은 "카메라 움직임"만 허용합니다.
- * 상품이 무언가를 닦고·지우고·정리하는 식의 기능·효과 연출은 실제로 일어나지 않은 일을 보여 주는 기만 광고가 됩니다.
- */
-export const PRODUCT_MOTIONS = [
-  "Slow 360-degree turntable rotation of the exact product shown",
-  "Slow cinematic camera push-in toward the exact product shown",
-  "Gentle camera orbit around the exact product shown",
-  "Subtle parallax camera pan across the exact product shown",
-];
-const PRODUCT_SUFFIX =
-  "clean neutral background, soft natural light. The product's shape, color, size and details stay exactly the same as the image. No hands, no people, no text, no logos, no added objects.";
-
-const MOTION_WORD = /(rotat|turntable|push-in|pull-back|dolly|orbit|pan\b|zoom|tilt|parallax|camera)/i;
-const FORBIDDEN_ACTION =
-  /\b(clean\w*|wip\w*|remov\w*|stain\w*|dirt\w*|grease|greasy|dust\w*|before|after|transform\w*|melt\w*|cut\w*|slic\w*|pour\w*|spray\w*|fill\w*|cook\w*|fix\w*|repair\w*|organi[sz]\w*|sort\w*|fold\w*|demonstrat\w*|using|uses?|hands?|person|people|results?|effect\w*|works?)\b/i;
-
-/** 사용자 정의 상품 프롬프트 점검 — 문제가 없으면 빈 배열 */
-export function checkProductPrompt(prompt: string): string[] {
-  const out: string[] = [];
-  // 고정 안전 문구("No hands, no people…")와 부정 표현은 연출이 아니므로 검사에서 뺍니다.
-  prompt = prompt.replace(PRODUCT_SUFFIX, "").replace(/\bno\s+[\w-]+/gi, "");
-  if (!MOTION_WORD.test(prompt)) out.push("상품 영상 프롬프트에는 카메라 움직임(rotation, push-in, orbit, pan, zoom 등)만 적어 주세요.");
-  const bad = prompt.match(FORBIDDEN_ACTION);
-  if (bad) out.push(`'${bad[0]}' — 상품의 기능·효과·사용 장면 연출은 쓸 수 없어요(실제로 일어나지 않은 효과를 보여 주는 광고가 됨).`);
-  return out;
-}
-
-export function productPrompt(motion: string): string {
-  return `${motion}, ${PRODUCT_SUFFIX}`;
-}
-
-const SCENE_SUFFIX = "Vertical 9:16 realistic smartphone footage, natural light. No text, no logos, no brand names. Do not show any specific product.";
-
-/** 문제 상황·분위기 장면 — 특정 상품이 보이지 않게 (가짜 상품 장면 방지) */
-export function scenePrompt(hint: string): string {
-  return `${hint.trim().replace(/\.$/, "")}. ${SCENE_SUFFIX}`;
-}
+// 프롬프트 가드는 도구와 상관없이 공통 — guard.ts
+export { checkProductPrompt, checkScenePrompt, PRODUCT_MOTIONS, productPrompt, scenePrompt } from "./guard.js";
+import { PRODUCT_MOTIONS, productPrompt, scenePrompt } from "./guard.js";
 
 export type AiJob = {
   type: "image_to_video" | "text_to_video";

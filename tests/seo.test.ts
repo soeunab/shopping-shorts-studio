@@ -121,6 +121,8 @@ describe("성과에서 배우기", () => {
     status,
     minutes: 0,
     aiCredits: 0,
+    aiUsd: 0,
+    provider: null,
     hookType,
     keyword: "서랍 정리",
     postedAt,

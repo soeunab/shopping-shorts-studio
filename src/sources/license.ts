@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { checkProductPrompt } from "../ai/runway.js";
+import { checkProductPrompt, checkScenePrompt } from "../ai/guard.js";
 
 /**
  * 영상 소스 라이선스 검증 — 이 프로젝트의 핵심 안전장치.
@@ -67,6 +67,8 @@ export const ClipSchema = z.object({
   prompt: z.string().optional(),
   model: z.string().optional(),
   derivedFrom: z.string().optional(),
+  /** AI 생성 도구 (runway, higgsfield, other) — report --by provider 비교용 */
+  provider: z.string().optional(),
 });
 export type Clip = z.infer<typeof ClipSchema>;
 export type ClipInput = z.input<typeof ClipSchema>;
@@ -111,8 +113,10 @@ export function checkClip(input: ClipInput): string[] {
       if (!clip.prompt) problems.push(`${clip.file}: 생성 프롬프트가 기록돼 있지 않아요.`);
       else problems.push(...checkProductPrompt(clip.prompt).map((p) => `${clip.file}: ${p}`));
       break;
-    case "OWN":
     case "AI":
+      if (clip.prompt) problems.push(...checkScenePrompt(clip.prompt).map((p) => `${clip.file}: ${p}`));
+      break;
+    case "OWN":
       break;
   }
   if (clip.role === "PRODUCT" && !PRODUCT_KINDS.includes(clip.kind)) {
