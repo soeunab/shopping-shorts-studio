@@ -127,6 +127,16 @@ export function openDb(file: string = dbPath()): DatabaseSync {
       PRIMARY KEY (date, platform)
     );
   `);
+  // 월 예산 계산용 AI 지출 기록 (생성할 때마다 한 줄)
+  db.exec(`CREATE TABLE IF NOT EXISTS ai_spend (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    month TEXT NOT NULL,
+    short_id INTEGER,
+    provider TEXT NOT NULL,
+    usd REAL NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );`);
   db.exec(`CREATE TABLE IF NOT EXISTS candidates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     key TEXT NOT NULL UNIQUE,
@@ -420,4 +430,15 @@ export function getCandidate<T>(db: DatabaseSync, id: number): CandidateRow<T> |
 
 export function setCandidateStatus(db: DatabaseSync, id: number, status: CandidateStatus, shortId?: number): void {
   db.prepare("UPDATE candidates SET status = ?, short_id = COALESCE(?, short_id), updated_at = datetime('now') WHERE id = ?").run(status, shortId ?? null, id);
+}
+
+// ─── AI 지출 (월 예산) ──────────────────────────────────────────────────
+export function recordSpend(db: DatabaseSync, e: { month: string; shortId?: number; provider: string; usd: number; note?: string }): void {
+  if (!(e.usd > 0)) return;
+  db.prepare("INSERT INTO ai_spend (month, short_id, provider, usd, note) VALUES (?, ?, ?, ?, ?)").run(e.month, e.shortId ?? null, e.provider, e.usd, e.note ?? null);
+}
+
+export function monthSpendUsd(db: DatabaseSync, month: string): number {
+  const r = db.prepare("SELECT COALESCE(SUM(usd), 0) AS usd FROM ai_spend WHERE month = ?").get(month) as { usd: number };
+  return Number(r.usd);
 }

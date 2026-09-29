@@ -21,10 +21,9 @@ TypeScript + `node:sqlite` + ffmpeg + 무료 AI 음성(Google Cloud TTS / macOS 
 - `src/ai/guard.ts`: 도구 공통 프롬프트 가드
   - `checkProductPrompt`: 카메라 모션만 허용, 효과 연출과 사람·아바타 소개 금지
   - `checkScenePrompt`: 제품 소개·후기 연출 금지
-- `src/ai/brief.ts`: Claude 대화창(Higgsfield·Runway MCP)용 생성 요청서. 대화로 만든 결과는 `ai-import`로 점검한 뒤 등록한다
-- `.mcp.json`
-  - runway: `scripts/setup-runway-mcp.sh`가 vendor/에 빌드(커밋하지 않음)
-  - higgsfield: http + OAuth
+- `src/ai/brief.ts`: Claude 대화창(Runway MCP)용 생성 요청서. 대화로 만든 결과는 `ai-import`로 점검한 뒤 등록한다
+- `src/budget.ts`: 월 예산(기본 3만 원, Claude 구독료 제외). `ai_spend` 테이블에 생성할 때마다 기록한다
+- `.mcp.json`: runway만 둔다. `scripts/setup-runway-mcp.sh`가 vendor/에 빌드한다(커밋하지 않음). AI 영상 도구는 Runway 하나로 정했다(README "Runway를 고른 이유")
 - `src/script/generate.ts`: 대본(훅 5개·공감·해결·CTA), 대가 표기, `[경험 추가]` 자리표시, 가짜 경험 탐지 `fakeExperienceLines`
 - `src/script/seo.ts`: 제목·태그·키워드·자막 점검 `lintMetadata`(경고만, 차단 없음)
 - `src/media/`
@@ -49,6 +48,7 @@ npm run doctor
 - **AI·스톡 소스를 실제 상품(PRODUCT) 장면에 쓰게 하지 않는다.** 예외는 `AI_FROM_PRODUCT` 하나다. 실제 상품 이미지에 카메라 모션만 준 영상이고, 원본·근거·프롬프트 기록이 필수다.
 - **AI로 상품의 기능·효과(닦기·정리·전후 비교·사용 장면)를 연출하지 않는다.** `checkProductPrompt`의 금지어와 모션 필수 규칙을 약화시키지 않는다. 상황 장면 프롬프트의 "Do not show any specific product"도 유지한다.
 - 유료 AI 호출(Runway)은 반드시 예상 비용을 보여 주고 확인을 받은 뒤 실행한다(`--yes`는 사용자가 명시할 때만). 쓴 크레딧은 기록한다.
+- **월 예산(`SSS_MONTHLY_BUDGET_KRW`, 기본 30,000원)을 넘는 유료 호출은 실행하지 않는다.** 비용을 모르는 모델도 생성하지 않는다. 새 유료 서비스를 넣을 때도 `checkBudget`과 `recordSpend`를 거치게 한다.
 - 어떤 AI 도구든 **사람·AI 아바타가 제품을 소개·추천·후기·언박싱하는 영상**을 만들거나 등록하게 하지 않는다(가짜 후기). 가드(`guard.ts`)를 약화시키지 않는다.
 - 대화(MCP)로 만든 영상은 `ai-import`로만 넣는다. 상품 컷은 원본 상품 이미지(`--from`)가 필수이고, 도구·모델·비용(`aiUsd`)을 기록한다.
 - **가짜 사용 후기를 만들지 않는다.** `경험:` 사실이 없으면 1인칭 사용 경험을 막는 규칙(`SYSTEM` 프롬프트와 `fakeExperienceLines`)과 `[경험 추가]` 렌더 차단을 유지한다.

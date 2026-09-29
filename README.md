@@ -93,52 +93,39 @@ npm run doctor
 - **파일**: 다른 도구로 만든 음성이나 본인 녹음을 `render --voice 파일`로 넣습니다. 앞뒤 무음을 자르고 속도를 맞추며, 숨 쉬는 구간에 맞춰 자막을 자동으로 넣습니다.
 - 속도는 `render --speed 1.15`로 조절합니다(기본 1.1, 음높이는 유지).
 
-### AI 영상 (Runway, 유료)
-직접 촬영하지 않는 대신, 실제 상품 이미지를 **카메라 모션만** 주어 영상으로 만들고 문제 상황 장면은 텍스트로 생성합니다.
-- 키: [dev.runwayml.com](https://dev.runwayml.com)에서 결제를 설정하고 API 키를 받아 `.env`의 `RUNWAYML_API_SECRET`에 넣습니다. 개발자 크레딧은 1크레딧에 $0.01이고, 구독과 별개입니다.
-- 비용 예: gen4_turbo 이미지→영상 5초에 약 $0.25, gen4.5 텍스트→영상 5초에 약 $0.60. 기본 구성(상품 2개, 문제 1개)이면 쇼츠 1편에 **약 $1.1**입니다. 모델은 `SSS_RUNWAY_I2V_MODEL`과 `SSS_RUNWAY_T2V_MODEL`로 바꿀 수 있습니다.
-- `ai-clip`은 생성하기 전에 계획과 예상 비용을 보여 주고 확인을 받습니다(`--dry-run`이면 계획만 봅니다). 쓴 크레딧은 `report`에 AI 비용으로 나옵니다.
+### AI 영상 (Runway, 유료) — 월 예산 3만 원
+직접 촬영하지 않는 대신, 실제 상품 이미지를 **카메라 모션만** 주어 영상으로 만들고 문제 상황 장면은 텍스트로 생성합니다. AI 영상 도구는 **Runway 하나만** 씁니다(선택 이유는 아래).
+- 키: [dev.runwayml.com](https://dev.runwayml.com)에서 결제를 설정하고 API 키를 받아 `.env`의 `RUNWAYML_API_SECRET`에 넣습니다. 개발자 크레딧은 1크레딧에 $0.01이고, 구독과 별개입니다. 첫 충전은 최소 **10달러(약 1만 4천 원)**입니다.
+- 비용 예: gen4_turbo 이미지→영상 5초에 약 $0.25(약 350원), gen4.5 텍스트→영상 5초에 약 $0.60(약 840원). 기본 구성(상품 2개 + 문제 1개)은 쇼츠 1편에 **약 $1.1(약 1,500원)**입니다.
+- **월 예산**: `.env`의 `SSS_MONTHLY_BUDGET_KRW`(기본 30,000원)와 `SSS_USD_KRW`(기본 1,400원)로 정합니다. Claude 구독료를 뺀 비용 기준입니다.
+  - `ai-clip`은 이번 달에 쓴 돈에 예상 비용을 더해 **예산을 넘으면 생성하지 않습니다**. 80%를 넘으면 경고합니다.
+  - 비용을 모르는 모델은 예산을 지킬 수 없어 생성을 막습니다.
+  - `report`에 이번 달 AI 비용과 남은 예산이 나옵니다.
+  - 월 3만 원이면 기본 구성으로 약 20편입니다. 더 아끼려면 `--no-problem`(문제 장면은 무료 스톡으로)이나 `--products 1`을 쓰세요. 편당 약 350~700원까지 줄어듭니다.
+- `ai-clip`은 생성하기 전에 계획과 예상 비용(원화 포함)을 보여 주고 확인을 받습니다(`--dry-run`이면 계획만 봅니다).
 - **지키는 선**
   - 상품 영상의 프롬프트는 회전, 푸시인, 오빗, 팬 같은 카메라 움직임만 허용합니다. "닦인다", "정리된다", "전후 비교", 손이나 사람이 쓰는 장면처럼 기능·효과를 연출하면 거부됩니다. 실제로 일어나지 않은 효과를 보여 주는 광고가 되기 때문입니다.
+  - 사람이나 AI 아바타가 제품을 소개·추천·후기·언박싱하는 연출도 거부됩니다(가짜 후기).
   - 상황 장면은 특정 상품이 보이지 않게 생성합니다.
   - 생성된 상품 영상은 모양, 색, 크기가 원본과 같은지 `approve`에서 확인합니다.
   - AI 장면이 있으면 각 플랫폼의 AI 콘텐츠 표시를 켭니다.
   - 넣는 상품 이미지의 사용 권리는 제휴 프로그램 약관과 Runway 약관을 확인하세요.
 
-### AI 영상 도구 선택: Runway vs Higgsfield
-| | Runway | Higgsfield |
-|---|---|---|
-| 연결 | `ai-clip`(API, 자동) + 공식 MCP | Claude 커넥터(OAuth, 키 불필요, **설정이 가장 쉬움**) |
-| 모델 | gen4_turbo·gen4.5·seedance2·veo3.1 등 | 30여 종(Kling·Seedance·Veo·Minimax 등), 카메라 프리셋 |
-| 비용(한 달 60클립 기준) | API 약 **$22** (5초 상품 컷 약 $0.25) | 구독 Starter 월 $19(약 15편 분량)로는 부족해 **Plus 월 $47~59** 필요, 크레딧 이월 안 됨. 별도 API는 5초 약 $0.39 |
-| 이 CLI 연동 | 자동(규칙 점검·비용 기록) | `ai-brief`로 요청서를 만들어 대화로 생성하고 `ai-import`로 점검·등록 |
+**Runway를 고른 이유 (Higgsfield와 비교)**: Higgsfield는 설정이 쉽고 모델이 많습니다. 하지만 이 분량(월 수십 클립)에는 유료 구독이 월 $47~59 수준으로 예산을 넘고, 남은 크레딧도 이월되지 않습니다. 4K나 시네마틱 프리셋은 1080p 상품 모션 컷에는 효과가 작고, 아바타·UGC 기능은 가짜 후기 위험이 있습니다. Runway는 쓴 만큼만 내고, `ai-clip`으로 규칙 점검과 비용 기록까지 자동으로 됩니다.
 
-**추천**: 기본 생산은 Runway API(`ai-clip`)로 합니다. 처음에는 $10만 충전하세요. 10편쯤 올린 뒤 **3초 이탈률**이 문제로 보이면, Higgsfield Starter를 한 달 써서 **첫 2초 상품 컷**만 만들어 봅니다. 결과는 `report --by provider`로 비교해 계속 쓸지 정합니다. 결제 전에 두 서비스의 공식 가격 페이지를 확인하세요(가격은 자주 바뀝니다).
-
-### Higgsfield MCP (Claude에서 대화로 생성)
-- **Claude 앱**: 설정 → 커넥터 → 사용자 지정 커넥터 추가 → `https://mcp.higgsfield.ai/mcp` → Higgsfield 계정으로 로그인. 유료 플랜이 있어야 쓸 수 있습니다.
-- **Claude Code**: 이 폴더의 `.mcp.json`에 이미 들어 있습니다. `claude` 실행 → `/mcp`에서 higgsfield 로그인. 다른 폴더에서는 `claude mcp add --transport http higgsfield https://mcp.higgsfield.ai/mcp`로 추가합니다.
-- **쓰는 순서**
-```bash
-npm run sss -- ai-brief 3 --for higgsfield     # 규칙과 컷별 프롬프트가 담긴 요청서 → Claude 대화창에 붙여 넣기(상품 이미지 첨부)
-# Claude 가 Higgsfield 로 생성·저장하면, 컷마다 등록:
-npm run sss -- ai-import 3 ~/Downloads/hf-1.mp4 --role PRODUCT --from 1 \
-  --prompt "Gentle camera orbit around the exact product shown, clean neutral background" \
-  --provider higgsfield --model kling-2.6 --usd 0.39
-```
-- **금지**: Higgsfield의 아바타·UGC·마케팅 스튜디오처럼 **사람이 제품을 들고 소개·추천·후기하는 영상**은 가짜 후기라 쓸 수 없습니다. `ai-import`가 프롬프트를 보고 거부하고, 상품 컷은 원본 상품 이미지(`--from`)가 없으면 등록되지 않습니다.
-
-### Runway MCP (Claude Code에서 대화로 생성)
+### Runway MCP (Claude Code에서 대화로 생성, 선택)
 ```bash
 npm run setup:runway-mcp            # 공식 runwayml/runway-api-mcp-server 를 vendor/ 에 받아 빌드
 echo 'export RUNWAYML_API_SECRET=key_xxx' >> ~/.zshrc && source ~/.zshrc
 claude                              # 이 폴더에서 실행 → .mcp.json 의 runway 서버 승인
 ```
-처음 몇 편은 MCP로 프롬프트를 이것저것 시험해 보고, 방식이 잡히면 `ai-clip`으로 일괄 생성하는 흐름을 권합니다. MCP로 만든 영상을 쓸 때는 반드시 `clip add`로 종류와 역할을 붙여 등록하세요.
-- 상품 이미지로 만든 영상: `--kind AI_FROM_PRODUCT --role PRODUCT`에 원본 URL, 근거, 프롬프트를 기록합니다. CLI로 등록하려면 `show`로 JSON을 확인한 뒤 등록하는데, `ai-clip`을 쓰면 이 기록이 자동으로 남습니다.
-- 그 외 상황 장면: `--kind AI --role PROBLEM`처럼 등록합니다.
-
-Claude 앱(claude.ai)에서는 Runway가 제공하는 호스팅 MCP 커넥터도 쓸 수 있습니다. 이 경우 비용은 Runway 구독 요금제에서 차감됩니다.
+대화로 프롬프트를 시험해 볼 때 씁니다. 평소 생산은 `ai-clip`으로 하세요.
+- `npm run sss -- ai-brief 3`: 규칙과 컷별 프롬프트가 담긴 요청서가 나옵니다. Claude 대화창에 붙여 넣으세요.
+- 대화로 만든 영상은 **반드시 `ai-import`로 등록**합니다. 그래야 규칙 점검, 출처 기록, 월 예산 합산이 됩니다.
+```bash
+npm run sss -- ai-import 3 ~/Downloads/rw-1.mp4 --role PRODUCT --from 1 \
+  --prompt "Gentle camera orbit around the exact product shown, clean neutral background" --model gen4_turbo --usd 0.25
+```
 
 ### 스톡 영상 (무료, 보조)
 [Pexels API](https://www.pexels.com/api/) 키를 무료로 발급받아 `.env`의 `PEXELS_API_KEY`에 넣으세요. 이미 다른 쇼츠에 쓴 영상은 자동으로 건너뜁니다.

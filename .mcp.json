@@ -7,10 +7,6 @@
         "RUNWAYML_API_SECRET": "${RUNWAYML_API_SECRET}",
         "MCP_TOOL_TIMEOUT": "1000000"
       }
-    },
-    "higgsfield": {
-      "type": "http",
-      "url": "https://mcp.higgsfield.ai/mcp"
     }
   }
 }

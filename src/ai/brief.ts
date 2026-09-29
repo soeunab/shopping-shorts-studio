@@ -6,7 +6,7 @@ import { PRODUCT_MOTIONS, productPrompt, scenePrompt } from "./guard.js";
  * 대화로 만든 영상도 CLI 와 같은 규칙을 따르도록, 규칙과 장면별 프롬프트를 함께 줍니다.
  * 결과 영상은 반드시 `sss ai-import` 로 등록해 점검·출처·비용 기록을 남깁니다.
  */
-export type BriefTarget = "higgsfield" | "runway";
+export type BriefTarget = "runway" | "higgsfield";
 
 export const BRIEF_RULES = [
   "세로 9:16, 5초, 영상 안에 글자·로고·워터마크 없음.",

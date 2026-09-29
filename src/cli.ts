@@ -20,6 +20,8 @@ import {
   usedSourceUrls,
   yppProgress,
   groupReport,
+  monthSpendUsd,
+  recordSpend,
   getCandidate,
   listCandidates,
   setCandidateStatus,
@@ -56,6 +58,7 @@ import { AI_KINDS, checkClips, ClipSchema, ROLES, SOURCE_KINDS, type Clip, type 
 import { checkProductPrompt, estimateCredits, planAiJobs, productImageDataUri, RunwayClient, USD_PER_CREDIT } from "./ai/runway.js";
 import { download as downloadFile } from "./sources/pexels.js";
 import { buildBrief } from "./ai/brief.js";
+import { budgetKrw, checkBudget, monthKey, toKrw } from "./budget.js";
 import { COUPANG_CATEGORIES, CoupangClient, coupangCred, type CoupangProduct } from "./research/coupang.js";
 import { naverOpenCred, trendMomentum } from "./research/datalab.js";
 import { fetchLaunchNews, isPreorderTitle } from "./research/launches.js";
@@ -84,9 +87,9 @@ const HELP = `쇼핑쇼츠 스튜디오 (합법 소스 전용 · 정보형 쇼�
   keywords <id> [--pick "검색어"]          네이버 월간 검색량으로 대표 검색 키워드 고르기 (검색광고 API 키 필요)
   seo <id>                                 제목·태그·키워드·자막 점검
   stock <id> "<영어 검색어>" [--role PROBLEM|CONTEXT|HOOK] [--count 3]     Pexels 무료 스톡 자동 받기
-  ai-brief <id> [--for higgsfield|runway]  Claude 대화창(Higgsfield·Runway MCP)에 붙여 넣을 생성 요청서(규칙+장면별 프롬프트)
-  ai-import <id> <파일> --role PRODUCT|PROBLEM|CONTEXT|HOOK --prompt "..." --provider higgsfield [--model M] [--usd 0.4] [--from <상품 이미지 clip 번호>]
-                                           대화로 만든 AI 영상을 규칙·출처 점검 후 등록
+  ai-brief <id>                            Claude 대화창(Runway MCP)에 붙여 넣을 생성 요청서(규칙+장면별 프롬프트)
+  ai-import <id> <파일> --role PRODUCT|PROBLEM|CONTEXT|HOOK --prompt "..." [--provider runway] [--model M] [--usd 0.25] [--from <상품 이미지 clip 번호>]
+                                           MCP·웹에서 만든 AI 영상을 규칙·출처 점검 후 등록(비용은 월 예산에 합산)
   ai-clip <id> [--products 2] [--no-problem] [--context] [--motion "camera ..."] [--dry-run] [--yes]
                                            Runway 로 AI 장면 생성: 실제 상품 이미지→카메라 모션, 공감 줄→상황 영상 (생성 전 비용 확인)
   clip add <id> <파일> --kind ${Object.keys(SOURCE_KINDS).join("|")} --role ${Object.keys(ROLES).join("|")} [--source URL] [--proof 근거]
@@ -451,7 +454,7 @@ async function main() {
     case "ai-brief": {
       const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { for: { type: "string" }, products: { type: "string" } } });
       const s = loadShort(db, need(positionals[0]));
-      const target = values.for === "runway" ? "runway" : "higgsfield";
+      const target = values.for === "higgsfield" ? "higgsfield" : "runway";
       const images = (s.clips as Clip[]).map((c, i) => ({ c, n: i + 1 })).filter(({ c }) => c.kind === "PRODUCT_IMAGE");
       if (!images.length) console.log("⚠️ 실제 상품 이미지(PRODUCT_IMAGE)가 없어 상품 컷은 빠집니다. clip add ... --kind PRODUCT_IMAGE --role PRODUCT 로 먼저 추가하세요.\n");
       console.log(buildBrief({ shortId: s.id, productName: s.productName, script: currentScript(s), productImages: images.map(({ c }) => c.file), target, productShots: Number(values.products ?? 2) }));
@@ -478,7 +481,7 @@ async function main() {
           throw new Error("상품 컷은 --from 에 원본 실제 상품 이미지의 clip 번호가 필요해요(clip check 로 확인). 원본 없이 AI 로 만든 상품 장면은 쓸 수 없어요.");
         }
       }
-      const provider = values.provider?.trim().toLowerCase() || "other";
+      const provider = values.provider?.trim().toLowerCase() || "runway";
       const dir = path.join(shortDir(s.id), "clips");
       mkdirSync(dir, { recursive: true });
       const dest = path.join(dir, `${clips.length + 1}-${provider}-${role.toLowerCase()}${path.extname(src) || ".mp4"}`);
@@ -492,6 +495,12 @@ async function main() {
       copyFileSync(src, dest);
       const usd = num(values.usd) ?? 0;
       updateShort(db, s.id, { clips: [...clips, clip], aiUsd: +(s.aiUsd + usd).toFixed(4) });
+      if (usd) {
+        const month = monthKey();
+        const b = checkBudget(monthSpendUsd(db, month), usd);
+        recordSpend(db, { month, shortId: s.id, provider, usd, note: `import ${values.model ?? ""}`.trim() });
+        console.log(b.ok ? b.message : `⚠️ ${b.message}`);
+      }
       console.log(`✅ ${ROLES[role]} · ${provider}${values.model ? `/${values.model}` : ""} 등록: ${dest}${usd ? ` · $${usd}` : ""}${base ? "\n   상품 모양·색·크기가 원본 이미지와 같은지 꼭 확인하세요." : ""}`);
       return;
     }
@@ -529,8 +538,14 @@ async function main() {
       const credits = estimateCredits(jobs);
       console.log(`생성 계획 (${jobs.length}개):`);
       for (const j of jobs) console.log(`  ${ROLES[j.role].padEnd(6)} ${j.model} ${j.duration}초 ${j.type === "image_to_video" ? `← ${path.basename(j.baseFile!)}` : ""}\n      ${j.prompt}`);
-      console.log(credits === null ? "예상 비용: 요금표에 없는 모델이 있어 계산할 수 없어요(Runway 가격표 확인)." : `예상 비용: ${credits} 크레딧 ≈ $${(credits * USD_PER_CREDIT).toFixed(2)}`);
+      if (credits === null) {
+        throw new Error("요금표에 없는 모델이 있어 비용을 계산할 수 없어요 — 월 예산을 지키려고 생성하지 않아요. SSS_RUNWAY_I2V_MODEL=gen4_turbo, SSS_RUNWAY_T2V_MODEL=gen4.5 로 두세요.");
+      }
+      const month = monthKey();
+      const budget = checkBudget(monthSpendUsd(db, month), credits * USD_PER_CREDIT);
+      console.log(`예상 비용: ${credits} 크레딧 ≈ $${(credits * USD_PER_CREDIT).toFixed(2)} (약 ${budget.addKrw.toLocaleString()}원)\n${budget.message}`);
       if (values["dry-run"]) return;
+      if (!budget.ok) throw new Error("월 예산을 넘어 생성하지 않았어요.");
       if (!values.yes && !(await confirm("Runway 크레딧을 써서 생성할까요?"))) return console.log("취소했어요.");
 
       const client = new RunwayClient();
@@ -546,7 +561,9 @@ async function main() {
         const url = await client.wait(taskId);
         const dest = path.join(dir, `${clips.length + added.length + 1}-runway-${j.role.toLowerCase()}-${taskId.slice(0, 8)}.mp4`);
         await downloadFile(url, dest);
-        spent += (estimateCredits([j]) ?? 0);
+        const jobCredits = estimateCredits([j]) ?? 0;
+        spent += jobCredits;
+        recordSpend(db, { month, shortId: s.id, provider: "runway", usd: jobCredits * USD_PER_CREDIT, note: `${j.model} ${j.role} ${taskId}` });
         const clip = ClipSchema.parse(
           base
             ? { file: dest, kind: "AI_FROM_PRODUCT", role: "PRODUCT", sourceUrl: base.sourceUrl, proof: base.proof, derivedFrom: base.file, prompt: j.prompt, model: j.model, provider: "runway", note: `Runway ${taskId}` }
@@ -774,6 +791,9 @@ async function main() {
       );
       const ch = latestChannel(db);
       for (const c of ch) console.log(`${c.platform} ${c.date}: 팔로워/구독자 ${c.followers.toLocaleString()} · 90일 조회 ${c.views90d.toLocaleString()}`);
+      const month = monthKey();
+      const spentKrw = toKrw(monthSpendUsd(db, month));
+      console.log(`이번 달(${month}) AI 비용: ${spentKrw.toLocaleString()}원 / 예산 ${budgetKrw().toLocaleString()}원 (남은 ${Math.max(0, budgetKrw() - spentKrw).toLocaleString()}원)`);
       const ypp = yppProgress(ch, { subs: num(process.env.SSS_YPP_SUBS), shortsViews90d: num(process.env.SSS_YPP_SHORTS_VIEWS) });
       if (ypp) console.log(`유튜브 수익창출 조건: 구독자 ${(ypp.subs * 100).toFixed(0)}% · 90일 쇼츠 조회 ${(ypp.views * 100).toFixed(0)}%`);
       else console.log("유튜브 수익창출 조건 진행률: .env 에 SSS_YPP_SUBS / SSS_YPP_SHORTS_VIEWS 를 넣으면 표시돼요(유튜브 고객센터 기준 확인).");
