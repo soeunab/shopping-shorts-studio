@@ -14,10 +14,12 @@ TypeScript + `node:sqlite` + ffmpeg + 무료 AI 음성(Google Cloud TTS / macOS 
   - 생성 전에 비용 추정(`estimateCredits`)을 보여 준다
 - `.mcp.json` + `scripts/setup-runway-mcp.sh`: 공식 Runway MCP(vendor/, 커밋하지 않음)
 - `src/script/generate.ts`: 대본(훅 5개·공감·해결·CTA), 대가 표기, `[경험 추가]` 자리표시, 가짜 경험 탐지 `fakeExperienceLines`
+- `src/script/seo.ts`: 제목·태그·키워드·자막 점검 `lintMetadata`(경고만, 차단 없음)
+- `src/research/naver.ts`: 네이버 검색광고 API 월간 검색량(jk-biz `naverSearchAdKeywords` 이식)
 - `src/media/`
   - `tts.ts`: 공급자 google/say, 외부 음성 무음 정렬
   - `googleTts.ts`
-  - `subtitles.ts`: 한 줄 자막, 위쪽 1/3
+  - `subtitles.ts`: 한 줄 자막(위쪽 1/3), 첫 1.5초 제목 카드, 강조 단어 노란색
   - `render.ts`: 역할별 컷 계획, 시드 고정 무작위 구간
 - `src/publish/`
   - `export.ts`: 플랫폼별 캡션과 links.txt
@@ -38,7 +40,8 @@ npm run doctor
 - 유료 AI 호출(Runway)은 반드시 예상 비용을 보여 주고 확인을 받은 뒤 실행한다(`--yes`는 사용자가 명시할 때만). 쓴 크레딧은 기록한다.
 - **가짜 사용 후기를 만들지 않는다.** `경험:` 사실이 없으면 1인칭 사용 경험을 막는 규칙(`SYSTEM` 프롬프트와 `fakeExperienceLines`)과 `[경험 추가]` 렌더 차단을 유지한다.
 - **사람 검수 없이 공개되는 경로를 만들지 않는다.** `posted`와 `publish`는 `APPROVED` 상태에서만 동작하고, API 업로드는 항상 `privacyStatus: "private"`다.
-- 대가 표기(모든 캡션 첫 줄과 화면 상단)를 빼지 않는다.
+- 대가 표기(모든 캡션 첫 부분과 화면 상단)를 빼지 않는다. 인스타·틱톡 첫 줄의 `[광고]`와 그다음 줄의 쿠팡 파트너스 문구를 유지한다.
+- 트래픽 규칙에 낚시 제목, 관련 없는 인기 태그, 키워드 과다 삽입을 넣지 않는다(`CLICKBAIT` 점검 유지). 검증 안 된 통설은 규칙으로 박지 말고 `report --by`로 비교한다.
 - AI 비용: 대본은 Claude 구독(`claude -p`)으로 만든다. API 키 경로를 추가하지 말고, `subscriptionEnv()`와 `--tools ""`를 약화시키지 않는다.
 - 음성은 약관상 상업 이용이 가능한 공식 서비스만 쓴다. 비공식 엔드포인트는 쓰지 않는다.
 - `data/`, `secrets/`, `.env`는 커밋하지 않는다.

@@ -19,6 +19,10 @@ import {
   updateShort,
   usedSourceUrls,
   yppProgress,
+  groupReport,
+  GROUP_BY,
+  MIN_SAMPLE,
+  type GroupBy,
   type ShortRow,
 } from "./db.js";
 import { doctor } from "./doctor.js";
@@ -37,8 +41,12 @@ import {
   ON_SCREEN_DISCLOSURE,
   placeholdersIn,
   ScriptSchema,
+  allHashtags,
+  selectedHookType,
   type Script,
 } from "./script/generate.js";
+import { lintMetadata } from "./script/seo.js";
+import { keywordVolumes, naverAdCred, rankKeywords } from "./research/naver.js";
 import { AI_KINDS, checkClips, ClipSchema, ROLES, SOURCE_KINDS, type Clip, type Role, type SourceKind } from "./sources/license.js";
 import { checkProductPrompt, estimateCredits, planAiJobs, productImageDataUri, RunwayClient, USD_PER_CREDIT } from "./ai/runway.js";
 import { download as downloadFile } from "./sources/pexels.js";
@@ -56,6 +64,8 @@ const HELP = `쇼핑쇼츠 스튜디오 (합법 소스 전용 · 정보형 쇼�
   new "<제품명>" [--url 쿠팡링크] [--naver-url 쇼핑커넥트링크] [--category 주방] [--fact "..."]...
   score <id> [--novel] [--solves "해결하는 문제"] [--season] [--category C]   제품 선정 4기준 (옵션 없으면 질문)
   script <id>                              대본 생성 → data/shorts/<id>/script.json (훅 고르기: hookIndex)
+  keywords <id> [--pick "검색어"]          네이버 월간 검색량으로 대표 검색 키워드 고르기 (검색광고 API 키 필요)
+  seo <id>                                 제목·태그·키워드·자막 점검
   stock <id> "<영어 검색어>" [--role PROBLEM|CONTEXT|HOOK] [--count 3]     Pexels 무료 스톡 자동 받기
   ai-clip <id> [--products 2] [--no-problem] [--context] [--motion "camera ..."] [--dry-run] [--yes]
                                            Runway 로 AI 장면 생성: 실제 상품 이미지→카메라 모션, 공감 줄→상황 영상 (생성 전 비용 확인)
@@ -65,12 +75,12 @@ const HELP = `쇼핑쇼츠 스튜디오 (합법 소스 전용 · 정보형 쇼�
 올리기
   export <id>                              폰 업로드용 mp4 + 플랫폼별 캡션(instagram/youtube/tiktok/naver) + links.txt
   approve <id>                             올리기 전 사람 검수 체크리스트
-  posted <id>                              폰으로 올린 뒤 '공개됨' 기록
+  posted <id> [--at "2026-10-01T20:00"]   폰으로 올린 뒤 '공개됨' 기록(올린 시각 → 시간대별 비교)
   youtube auth | upload <id> | publish <id>   (선택) 유튜브 API 비공개 업로드 → 승인 후 공개
 기록
   track <id> --platform ${PLATFORMS.join("|")} [--views N] [--clicks N] [--orders N] [--commission 원] [--source S] [--minutes 제작분]
   track-channel --platform YOUTUBE|INSTAGRAM|... [--followers N] [--views90 N]
-  report                                   성과·시간당 수익·AI 비용·수익창출 조건 진행률`;
+  report [--by hook|keyword|hour]          성과·시간당 수익·AI 비용·수익창출 조건 진행률 / 훅 유형·키워드·시간대별 비교`;
 
 function need(id: string | undefined): number {
   const n = Number(id);
@@ -111,6 +121,22 @@ async function confirm(question: string): Promise<boolean> {
   const a = (await ask(rl, `${question} (y/N) `)).toLowerCase();
   rl.close();
   return a === "y" || a === "yes";
+}
+
+/** 성과 비교용으로 쇼츠에 남기는 대본 정보 */
+function metaOf(script: Script) {
+  return { hookType: selectedHookType(script), title: script.titles[0] ?? null, keyword: script.searchKeywords[0] ?? null };
+}
+
+/** "2026-10-01T20:00" 또는 "20:00"(오늘) → 로컬 시각 ISO 문자열(시간대 비교용) */
+function postedAt(at?: string): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const d = new Date();
+  const local = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (!at) return local;
+  if (/^\d{1,2}:\d{2}$/.test(at)) return `${local.slice(0, 10)}T${at.padStart(5, "0")}`;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(at)) return at.slice(0, 16);
+  throw new Error('--at 은 "2026-10-01T20:00" 또는 "20:00" 형식이에요.');
 }
 
 const num = (v?: string) => (v === undefined ? undefined : Number(v.replaceAll(",", "")));
@@ -196,8 +222,41 @@ async function main() {
       script.hooks.forEach((h, i) => console.log(`  [${i}] ${h}`));
       console.log("대본:");
       narration(script).forEach((l) => console.log(`  ${l.role.padEnd(8)} ${l.text}`));
-      console.log(`제목 후보: ${script.titles.join(" / ")}\n댓글 키워드: ${script.commentKeyword}\n저장: ${file}`);
+      console.log(`제목 후보: ${script.titles.join(" / ")}`);
+      console.log(`검색 키워드: ${script.searchKeywords.join(", ") || "-"} · 첫 화면 제목: ${script.onScreenTitle ?? "-"}`);
+      console.log(`해시태그: ${allHashtags(script).join(" ")} · 댓글 키워드: ${script.commentKeyword}\n저장: ${file}`);
       for (const p of scriptProblems(s, script)) console.log(`⚠️ ${p}`);
+      for (const w of lintMetadata(script)) console.log(`💡 ${w}`);
+      if (naverAdCred()) console.log(`검색량으로 키워드 고르기: npm run sss -- keywords ${s.id}`);
+      return;
+    }
+    case "seo": {
+      const s = loadShort(db, need(rest[0]));
+      const warnings = lintMetadata(currentScript(s));
+      console.log(warnings.length ? warnings.map((w) => `💡 ${w}`).join("\n") : "✅ 제목·태그·키워드·자막 점검 통과");
+      return;
+    }
+    case "keywords": {
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { pick: { type: "string" } } });
+      const s = loadShort(db, need(positionals[0]));
+      const script = currentScript(s);
+      const file = path.join(shortDir(s.id), "script.json");
+      if (values.pick) {
+        const pick = values.pick.trim();
+        script.searchKeywords = [pick, ...script.searchKeywords.filter((k) => k !== pick)].slice(0, 5);
+        writeFileSync(file, JSON.stringify(script, null, 2));
+        updateShort(db, s.id, { script });
+        console.log(`✅ 대표 키워드: ${pick} — 제목·훅·첫 화면 제목에도 넣었는지 확인하세요: npm run sss -- seo ${s.id}`);
+        return;
+      }
+      const cred = naverAdCred();
+      if (!cred) throw new Error("네이버 검색광고 API 키가 없어요(.env: NAVER_AD_API_KEY / NAVER_AD_SECRET_KEY / NAVER_AD_CUSTOMER_ID — jk-biz 와 같은 값).");
+      const hints = script.searchKeywords.length ? script.searchKeywords : [s.productName];
+      const ranked = rankKeywords(await keywordVolumes(hints, cred), hints);
+      if (!ranked.length) return console.log("관련 검색어를 찾지 못했어요. script.json 의 searchKeywords 를 바꿔 보세요.");
+      console.log("월간 모바일 검색량 (경쟁은 광고 경쟁도):");
+      for (const k of ranked) console.log(`  ${String(k.monthlyMobile).padStart(7)}  ${k.keyword}  (PC ${k.monthlyPc}, 경쟁 ${k.compIdx || "-"})`);
+      console.log(`\n고르기: npm run sss -- keywords ${s.id} --pick "${ranked[0]!.keyword}"  (검색량이 너무 큰 넓은 말보다, 문제를 구체적으로 말하는 중간 크기가 쇼츠 검색에 유리한 경우가 많아요)`);
       return;
     }
     case "stock": {
@@ -347,7 +406,7 @@ async function main() {
       const shots = planShots(clips, roleSegments, durations, { seed: s.id });
 
       const assFile = path.join(dir, "subs.ass");
-      writeFileSync(assFile, buildAss(segments, ON_SCREEN_DISCLOSURE));
+      writeFileSync(assFile, buildAss(segments, ON_SCREEN_DISCLOSURE, { titleCard: script.onScreenTitle, emphasis: lines.map((l) => l.emphasis) }));
       const out = path.join(dir, `short-${s.id}.mp4`);
       console.log(`렌더 중(ffmpeg, 컷 ${shots.length}개)…`);
       try {
@@ -357,7 +416,7 @@ async function main() {
         console.log("하드웨어 인코더 실패 → 소프트웨어(libx264)로 다시 시도");
         await runOk("ffmpeg", buildRenderArgs({ shots, audio, assFile, out, hardware: false }));
       }
-      updateShort(db, s.id, { script, videoPath: out, status: "RENDERED" });
+      updateShort(db, s.id, { script, videoPath: out, status: "RENDERED", ...metaOf(script) });
       console.log(`✅ ${out} (${(await probeDuration(out)).toFixed(1)}초) — 재생해 확인한 뒤: npm run sss -- export ${s.id}`);
       return;
     }
@@ -367,8 +426,9 @@ async function main() {
       const problems = [...scriptProblems(s, script), ...checkClips(s.clips as Clip[])];
       if (problems.length) throw new Error(problems.join("\n"));
       if (!s.videoPath || !existsSync(s.videoPath)) throw new Error("렌더된 영상이 없어요. 먼저 render 하세요.");
+      for (const w of lintMetadata(script)) console.log(`💡 ${w}`);
       const dir = writeExport(s, script);
-      if (["RENDERED", "SCRIPTED", "DRAFT"].includes(s.status)) updateShort(db, s.id, { status: "EXPORTED" });
+      updateShort(db, s.id, { ...metaOf(script), ...(["RENDERED", "SCRIPTED", "DRAFT"].includes(s.status) ? { status: "EXPORTED" as const } : {}) });
       console.log(`✅ ${dir}\n   short-${s.id}.mp4, instagram.txt, youtube.txt, tiktok.txt, naver.txt, links.txt\n   에어드롭·아이클라우드로 폰에 보낸 뒤: npm run sss -- approve ${s.id}`);
       return;
     }
@@ -394,9 +454,10 @@ async function main() {
       return;
     }
     case "posted": {
-      const s = loadShort(db, need(rest[0]));
+      const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { at: { type: "string" } } });
+      const s = loadShort(db, need(positionals[0]));
       if (s.status !== "APPROVED") throw new Error(`사람이 승인한 쇼츠만 올릴 수 있어요(현재 ${s.status}). approve 를 먼저 하세요.`);
-      updateShort(db, s.id, { status: "PUBLISHED" });
+      updateShort(db, s.id, { status: "PUBLISHED", postedAt: postedAt(values.at) });
       console.log(`✅ #${s.id} 공개됨으로 기록. 며칠 뒤 성과: npm run sss -- track ${s.id} --platform INSTAGRAM --views ...`);
       return;
     }
@@ -413,8 +474,8 @@ async function main() {
       if (problems.length) throw new Error(problems.join("\n"));
       const r = await uploadPrivate(s.videoPath, {
         title: `${script.titles[0]} #shorts`,
-        description: [COUPANG_DISCLOSURE, "", "제품 정보는 채널 프로필 링크에서 확인하세요.", "", script.hashtags.join(" ")].join("\n"),
-        tags: script.hashtags.map((h) => h.replace(/^#/, "")),
+        description: [COUPANG_DISCLOSURE, "", "제품 정보는 채널 프로필 링크에서 확인하세요.", "", allHashtags(script).slice(0, 3).join(" ")].join("\n"),
+        tags: [...script.searchKeywords, ...allHashtags(script).map((h) => h.replace(/^#/, ""))],
         syntheticMedia: (s.clips as Clip[]).some((c) => AI_KINDS.includes(c.kind)),
       });
       updateShort(db, s.id, { remoteUrl: r.url, status: "PRIVATE" });
@@ -475,7 +536,18 @@ async function main() {
       return;
     }
     case "report": {
+      const { values } = parseArgs({ args: rest, options: { by: { type: "string" } } });
       const rows = report(db);
+      if (values.by) {
+        if (!(GROUP_BY as readonly string[]).includes(values.by)) throw new Error(`--by 는 ${GROUP_BY.join(", ")} 중 하나예요.`);
+        const groups = groupReport(rows, values.by as GroupBy);
+        if (!groups.length) return console.log("공개된 쇼츠가 없어요(posted 로 기록).");
+        console.log(`${{ hook: "훅 유형", keyword: "대표 키워드", hour: "올린 시간대" }[values.by as GroupBy]}별 (공개된 쇼츠, 조회수 중앙값 순)`);
+        for (const g of groups) {
+          console.log(`  ${g.group.padEnd(12)} ${String(g.count).padStart(3)}편  중앙값 ${g.medianViews.toLocaleString().padStart(9)}  수수료 ${g.commission.toLocaleString()}원${g.enough ? "" : `  (표본 부족 <${MIN_SAMPLE}편)`}`);
+        }
+        return;
+      }
       console.log("id\t상태\t\t분\t조회(합)\t클릭\t주문\t수수료\t플랫폼별 조회\t제품");
       for (const r of rows) {
         const by = Object.entries(r.byPlatform).map(([p, v]) => `${p[0]}${v}`).join(" ") || "-";

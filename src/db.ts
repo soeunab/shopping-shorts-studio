@@ -30,6 +30,11 @@ export type ShortRow = {
   minutes: number;
   /** AI 영상 생성에 쓴 크레딧(Runway 1크레딧 = $0.01) */
   aiCredits: number;
+  /** 성과 비교용: 고른 훅 유형·제목·대표 검색 키워드·올린 시각 */
+  hookType: string | null;
+  title: string | null;
+  keyword: string | null;
+  postedAt: string | null;
   createdAt: string;
 };
 
@@ -61,6 +66,10 @@ function toRow(r: Raw): ShortRow {
     remoteUrl: (r.remote_url as string | null) ?? null,
     minutes: Number(r.minutes ?? 0),
     aiCredits: Number(r.ai_credits ?? 0),
+    hookType: (r.hook_type as string | null) ?? null,
+    title: (r.title as string | null) ?? null,
+    keyword: (r.keyword as string | null) ?? null,
+    postedAt: (r.posted_at as string | null) ?? null,
     createdAt: String(r.created_at),
   };
 }
@@ -116,6 +125,7 @@ export function openDb(file: string = dbPath()): DatabaseSync {
   ensureColumn(db, "shorts", "scores", "TEXT");
   ensureColumn(db, "shorts", "minutes", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "shorts", "ai_credits", "INTEGER NOT NULL DEFAULT 0");
+  for (const c of ["hook_type", "title", "keyword", "posted_at"]) ensureColumn(db, "shorts", c, "TEXT");
 
   // 초기 버전 metrics(플랫폼 구분 없음) → 플랫폼별 기록으로 옮김
   const hasMetrics = columns(db, "metrics").length > 0;
@@ -147,7 +157,7 @@ export function listShorts(db: DatabaseSync): ShortRow[] {
   return (db.prepare("SELECT * FROM shorts ORDER BY id DESC").all() as Raw[]).map(toRow);
 }
 
-export type ShortPatch = Partial<Pick<ShortRow, "status" | "script" | "clips" | "videoPath" | "remoteUrl" | "scores" | "minutes" | "aiCredits">>;
+export type ShortPatch = Partial<Pick<ShortRow, "status" | "script" | "clips" | "videoPath" | "remoteUrl" | "scores" | "minutes" | "aiCredits" | "hookType" | "title" | "keyword" | "postedAt">>;
 
 export function updateShort(db: DatabaseSync, id: number, patch: ShortPatch): ShortRow {
   const sets: string[] = [];
@@ -161,6 +171,10 @@ export function updateShort(db: DatabaseSync, id: number, patch: ShortPatch): Sh
   if (patch.remoteUrl !== undefined) set("remote_url", patch.remoteUrl);
   if (patch.minutes !== undefined) set("minutes", patch.minutes);
   if (patch.aiCredits !== undefined) set("ai_credits", patch.aiCredits);
+  if (patch.hookType !== undefined) set("hook_type", patch.hookType);
+  if (patch.title !== undefined) set("title", patch.title);
+  if (patch.keyword !== undefined) set("keyword", patch.keyword);
+  if (patch.postedAt !== undefined) set("posted_at", patch.postedAt);
   if (sets.length) db.prepare(`UPDATE shorts SET ${sets.join(", ")} WHERE id = ?`).run(...vals, id);
   const row = getShort(db, id);
   if (!row) throw new Error(`쇼츠 #${id} 를 찾을 수 없어요.`);
@@ -225,11 +239,19 @@ export function latestChannel(db: DatabaseSync): ChannelRow[] {
   ).map((r) => ({ ...r, followers: Number(r.followers), views90d: Number(r.views90d) }));
 }
 
-export type ReportRow = { id: number; productName: string; status: string; minutes: number; aiCredits: number; views: number; clicks: number; orders: number; commission: number; byPlatform: Partial<Record<Platform, number>> };
+export type ReportRow = {
+  id: number;
+  productName: string;
+  status: string;
+  minutes: number;
+  aiCredits: number;
+  hookType: string | null;
+  keyword: string | null;
+  postedAt: string | null; views: number; clicks: number; orders: number; commission: number; byPlatform: Partial<Record<Platform, number>> };
 
 /** 쇼츠별 플랫폼 최신 기록을 합산 */
 export function report(db: DatabaseSync): ReportRow[] {
-  const shorts = db.prepare("SELECT id, product_name, status, minutes, ai_credits FROM shorts ORDER BY id").all() as Raw[];
+  const shorts = db.prepare("SELECT id, product_name, status, minutes, ai_credits, hook_type, keyword, posted_at FROM shorts ORDER BY id").all() as Raw[];
   const latest = db
     .prepare(
       `SELECT m.* FROM metrics m
@@ -247,6 +269,9 @@ export function report(db: DatabaseSync): ReportRow[] {
       status: String(s.status),
       minutes: Number(s.minutes ?? 0),
       aiCredits: Number(s.ai_credits ?? 0),
+      hookType: (s.hook_type as string | null) ?? null,
+      keyword: (s.keyword as string | null) ?? null,
+      postedAt: (s.posted_at as string | null) ?? null,
       views: sum("views"),
       clicks: sum("clicks"),
       orders: sum("orders"),
@@ -297,4 +322,39 @@ export function yppProgress(ch: ChannelRow[], target: { subs?: number; shortsVie
   const yt = ch.find((c) => c.platform === "YOUTUBE");
   const ratio = (v: number, t?: number) => (t ? Math.min(1, v / t) : 1);
   return { subs: ratio(yt?.followers ?? 0, target.subs), views: ratio(yt?.views90d ?? 0, target.shortsViews90d) };
+}
+
+export const GROUP_BY = ["hook", "keyword", "hour"] as const;
+export type GroupBy = (typeof GROUP_BY)[number];
+/** 그룹 비교에서 이보다 적은 편수는 우연일 가능성이 커서 "표본 부족"으로 표시 */
+export const MIN_SAMPLE = 5;
+
+export type GroupRow = { group: string; count: number; medianViews: number; commission: number; enough: boolean };
+
+const median = (xs: number[]) => {
+  if (!xs.length) return 0;
+  const a = [...xs].sort((x, y) => x - y);
+  const m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m]! : (a[m - 1]! + a[m]!) / 2;
+};
+
+/** 공개된 쇼츠를 훅 유형·대표 키워드·올린 시간대로 묶어 조회수 중앙값 비교 */
+export function groupReport(rows: ReportRow[], by: GroupBy): GroupRow[] {
+  const key = (r: ReportRow): string => {
+    if (by === "hook") return r.hookType ?? "(미기록)";
+    if (by === "keyword") return r.keyword ?? "(미기록)";
+    const h = r.postedAt?.match(/T(\d{2})/)?.[1];
+    return h ? `${h}시` : "(미기록)";
+  };
+  const groups = new Map<string, ReportRow[]>();
+  for (const r of rows.filter((x) => x.status === "PUBLISHED")) groups.set(key(r), [...(groups.get(key(r)) ?? []), r]);
+  return [...groups.entries()]
+    .map(([group, rs]) => ({
+      group,
+      count: rs.length,
+      medianViews: median(rs.map((r) => r.views)),
+      commission: rs.reduce((a, r) => a + r.commission, 0),
+      enough: rs.length >= MIN_SAMPLE,
+    }))
+    .sort((a, b) => b.medianViews - a.medianViews);
 }

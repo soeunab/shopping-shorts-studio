@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { categoryMatches, evaluate, failedCriteria } from "../src/product/score.js";
-import { buildCaptions, buildLinks } from "../src/publish/export.js";
+import { buildCaptions, buildLinks, josaIGa, platformTags } from "../src/publish/export.js";
 import { COUPANG_DISCLOSURE, SHOPPING_CONNECT_DISCLOSURE } from "../src/script/generate.js";
 import { chooseVideos, pickPexelsFile, type PexelsVideo } from "../src/sources/pexels.js";
 import { sample } from "./fixtures.js";
@@ -22,13 +22,39 @@ describe("제품 선정 4기준", () => {
 });
 
 describe("플랫폼별 내보내기", () => {
-  it("모든 캡션 첫 줄이 대가 표기, 네이버는 쇼핑커넥트 링크가 있으면 그 표기", () => {
-    const withNaver = buildCaptions({ naverUrl: "https://naver.me/x" }, sample);
-    expect(withNaver.instagram.split("\n")[0]).toBe(COUPANG_DISCLOSURE);
-    expect(withNaver.tiktok.split("\n")[0]).toBe(COUPANG_DISCLOSURE);
-    expect(withNaver.naver.split("\n")[0]).toBe(SHOPPING_CONNECT_DISCLOSURE);
-    expect(withNaver.youtube).toContain(`[설명]\n${COUPANG_DISCLOSURE}`);
-    expect(buildCaptions({ naverUrl: null }, sample).naver.split("\n")[0]).toBe(COUPANG_DISCLOSURE);
+  it("인스타·틱톡 첫 줄은 [광고] + 훅(+키워드), 바로 다음 줄에 대가 표기 전문", () => {
+    const c = buildCaptions({ naverUrl: "https://naver.me/x" }, sample);
+    for (const p of ["instagram", "tiktok"] as const) {
+      const [first, second] = c[p].split("\n");
+      expect(first).toBe("[광고] 서랍 정리 이거 하나로 끝");
+      expect(second).toBe(COUPANG_DISCLOSURE);
+    }
+  });
+
+  it("훅에 키워드가 없으면 첫 줄에 대표 키워드를 붙임", () => {
+    const c = buildCaptions({ naverUrl: null }, { ...sample, hookIndex: 0 });
+    expect(c.instagram.split("\n")[0]).toBe("[광고] 서랍 열 때마다 한숨 나오죠 | 서랍 정리");
+  });
+
+  it("유튜브 설명 첫 줄 대가 표기, 둘째 줄 키워드 문장, 해시태그 3개(검색성 높은 순)", () => {
+    const c = buildCaptions({ naverUrl: null }, sample);
+    expect(c.youtube).toContain(`[설명]\n${COUPANG_DISCLOSURE}\n서랍 정리가 고민이라면 참고하세요. (수저 정리)`);
+    expect(platformTags(sample, "youtube")).toEqual(["#주방정리", "#서랍정리", "#수저정리"]);
+    expect(platformTags(sample, "instagram")).toEqual(["#살림템", "#주방정리", "#서랍정리", "#수저정리"]);
+  });
+
+  it("네이버는 쇼핑커넥트 링크가 있으면 그 표기, 검색 키워드도 태그로", () => {
+    const withNaver = buildCaptions({ naverUrl: "https://naver.me/x" }, sample).naver;
+    expect(withNaver).toContain(SHOPPING_CONNECT_DISCLOSURE);
+    expect(withNaver).toContain("#수저정리");
+    expect(withNaver.match(/#서랍정리/g)).toHaveLength(1);
+    expect(buildCaptions({ naverUrl: null }, sample).naver).toContain(COUPANG_DISCLOSURE);
+  });
+
+  it("받침에 맞는 조사", () => {
+    expect(josaIGa("서랍 정리")).toBe("가");
+    expect(josaIGa("수납")).toBe("이");
+    expect(josaIGa("abc")).toBe("가");
   });
 
   it("인스타는 댓글 키워드 DM 안내, 링크는 캡션에 넣지 않음", () => {
