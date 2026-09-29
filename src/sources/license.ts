@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { checkProductPrompt } from "../ai/runway.js";
 
 /**
  * 영상 소스 라이선스 검증 — 이 프로젝트의 핵심 안전장치.
@@ -11,6 +12,7 @@ export const SOURCE_KINDS = {
   STOCK: "라이선스 무료 영상/이미지 (Pexels·Pixabay 등)",
   PERMISSION: "판매자·제조사 사용 허락",
   AI: "AI 생성 이미지/영상",
+  AI_FROM_PRODUCT: "실제 상품 이미지를 AI로 움직인 영상(카메라 모션만)",
   PRODUCT_IMAGE: "제휴 프로그램이 홍보용으로 제공한 상품 이미지",
 } as const;
 
@@ -48,7 +50,9 @@ export const ROLES = {
 export type Role = keyof typeof ROLES;
 
 /** 실제 상품 장면에 쓸 수 있는 소스 — 실물과 다른 AI·스톡 이미지를 상품처럼 보여 주지 않기 위함 */
-export const PRODUCT_KINDS: SourceKind[] = ["PRODUCT_IMAGE", "PERMISSION", "OWN"];
+export const PRODUCT_KINDS: SourceKind[] = ["PRODUCT_IMAGE", "AI_FROM_PRODUCT", "PERMISSION", "OWN"];
+/** AI 가 만든 장면 — 업로드할 때 플랫폼의 AI 콘텐츠 표시가 필요 */
+export const AI_KINDS: SourceKind[] = ["AI", "AI_FROM_PRODUCT"];
 
 export const ClipSchema = z.object({
   file: z.string().min(1),
@@ -59,6 +63,10 @@ export const ClipSchema = z.object({
   /** 라이선스·허락 근거 (허락 메일 파일 경로, 라이선스 이름 등) */
   proof: z.string().optional(),
   note: z.string().optional(),
+  /** AI 생성 소스: 사용한 프롬프트·모델·원본 이미지 */
+  prompt: z.string().optional(),
+  model: z.string().optional(),
+  derivedFrom: z.string().optional(),
 });
 export type Clip = z.infer<typeof ClipSchema>;
 export type ClipInput = z.input<typeof ClipSchema>;
@@ -95,6 +103,13 @@ export function checkClip(input: ClipInput): string[] {
     case "PRODUCT_IMAGE":
       if (!clip.sourceUrl) problems.push(`${clip.file}: 상품 이미지의 출처 URL 이 필요해요.`);
       if (!clip.proof) problems.push(`${clip.file}: 제휴 프로그램 약관상 사용 가능 근거(proof)를 적어 주세요.`);
+      break;
+    case "AI_FROM_PRODUCT":
+      if (!clip.derivedFrom) problems.push(`${clip.file}: 원본 상품 이미지(derivedFrom)가 기록돼 있지 않아요.`);
+      if (!clip.sourceUrl) problems.push(`${clip.file}: 원본 상품 이미지의 출처 URL 이 필요해요.`);
+      if (!clip.proof) problems.push(`${clip.file}: 원본 상품 이미지의 사용 가능 근거(proof)가 필요해요.`);
+      if (!clip.prompt) problems.push(`${clip.file}: 생성 프롬프트가 기록돼 있지 않아요.`);
+      else problems.push(...checkProductPrompt(clip.prompt).map((p) => `${clip.file}: ${p}`));
       break;
     case "OWN":
     case "AI":

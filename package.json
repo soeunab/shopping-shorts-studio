@@ -8,6 +8,7 @@
   "scripts": {
     "sss": "node --disable-warning=ExperimentalWarning --import tsx src/cli.ts",
     "doctor": "node --disable-warning=ExperimentalWarning --import tsx src/cli.ts doctor",
+    "setup:runway-mcp": "bash scripts/setup-runway-mcp.sh",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

@@ -3,7 +3,7 @@
 주방·살림 **문제해결템을 정보형으로 소개하는** 15~30초 쇼핑 쇼츠를 **합법 소스로만** 만드는 맥미니(Apple Silicon)용 CLI입니다. 쿠팡파트너스와 네이버 쇼핑커넥트를 씁니다.
 
 ```
-new(제품) → score(선정 4기준) → script(훅 5개·공감·해결·CTA) → stock(Pexels 자동)·clip add(상품 이미지)
+new(제품) → score(선정 4기준) → script(훅 5개·공감·해결·CTA) → clip add(상품 이미지) → ai-clip(Runway)·stock(Pexels)
 → render(무료 AI 음성·한 줄 자막·2~3초 컷) → export(플랫폼별 캡션) → approve(사람 검수) → 폰으로 업로드 → posted → track/report
 ```
 
@@ -16,13 +16,14 @@ new(제품) → score(선정 4기준) → script(훅 5개·공감·해결·CTA) 
   - 도우인·틱톡·샤오홍슈 등 **다른 사람 영상 재편집**은 하지 않습니다. 저작권 문제가 있고, "같은 소스·같은 구조"는 수익창출 정지의 주된 사유입니다. 소스 등록 단계에서 거부됩니다.
   - **가짜 내돈내산**도 하지 않습니다. 써 보지 않았는데 "써 보니"라고 말하면 공정위 지침 위반입니다. 이런 문장이 있으면 렌더가 막힙니다.
   - **AI나 스톡 이미지를 실제 상품처럼 보여 주지 않습니다.** 상품 장면에는 실제 상품 이미지만 쓸 수 있습니다.
-- **알아둘 위험**: 스톡, AI 이미지, AI 음성만 쓰는 채널은 유튜브의 "비진정성 콘텐츠" 판단에 걸리기 쉽습니다. 그래서 유튜브는 서브로만 쓰고, 편마다 컷 순서와 구간이 달라지게 렌더합니다. 나중에 직접 촬영(`--kind OWN`)이나 본인 녹음(`render --voice`)을 섞으면 이 위험이 크게 줄어듭니다.
+- **알아둘 위험**: 직접 촬영 없이 AI 영상, 스톡, AI 음성만 쓰는 채널은 유튜브의 "비진정성 콘텐츠" 판단에 걸리기 쉽습니다. 그래서 유튜브는 서브로만 쓰고, 편마다 컷 순서와 구간이 달라지게 렌더합니다. 본인 녹음(`render --voice`)을 섞으면 이 위험이 크게 줄어듭니다.
 
 ## 영상 소스와 역할
 | 종류 `--kind` | 예 | 쓸 수 있는 역할 `--role` |
 |---|---|---|
 | `STOCK` | Pexels·Pixabay (`stock` 명령이 자동으로 받음) | HOOK, PROBLEM, CONTEXT |
-| `AI` | AI로 만든 상황 이미지·영상 | HOOK, PROBLEM, CONTEXT |
+| `AI` | AI로 만든 상황 이미지·영상(Runway 텍스트→영상 등) | HOOK, PROBLEM, CONTEXT |
+| `AI_FROM_PRODUCT` | 실제 상품 이미지를 AI로 움직인 영상(`ai-clip`이 생성, 카메라 모션만) | **PRODUCT** 포함 전부 |
 | `PRODUCT_IMAGE` | 쿠팡·네이버 상품 페이지 이미지(`--source` URL, `--proof` 근거 필수) | **PRODUCT** 포함 전부 |
 | `PERMISSION` | 판매자가 사용을 허락한 영상(`--proof` 필수) | 전부 |
 | `OWN` | 직접 촬영 | 전부 |
@@ -44,7 +45,31 @@ npm run doctor
 - **파일**: 다른 도구로 만든 음성이나 본인 녹음을 `render --voice 파일`로 넣습니다. 앞뒤 무음을 자르고 속도를 맞추며, 숨 쉬는 구간에 맞춰 자막을 자동으로 넣습니다.
 - 속도는 `render --speed 1.15`로 조절합니다(기본 1.1, 음높이는 유지).
 
-### 스톡 영상
+### AI 영상 (Runway, 유료)
+직접 촬영하지 않는 대신, 실제 상품 이미지를 **카메라 모션만** 주어 영상으로 만들고 문제 상황 장면은 텍스트로 생성합니다.
+- 키: [dev.runwayml.com](https://dev.runwayml.com)에서 결제를 설정하고 API 키를 받아 `.env`의 `RUNWAYML_API_SECRET`에 넣습니다. 개발자 크레딧은 1크레딧에 $0.01이고, 구독과 별개입니다.
+- 비용 예: gen4_turbo 이미지→영상 5초에 약 $0.25, gen4.5 텍스트→영상 5초에 약 $0.60. 기본 구성(상품 2개, 문제 1개)이면 쇼츠 1편에 **약 $1.1**입니다. 모델은 `SSS_RUNWAY_I2V_MODEL`과 `SSS_RUNWAY_T2V_MODEL`로 바꿀 수 있습니다.
+- `ai-clip`은 생성하기 전에 계획과 예상 비용을 보여 주고 확인을 받습니다(`--dry-run`이면 계획만 봅니다). 쓴 크레딧은 `report`에 AI 비용으로 나옵니다.
+- **지키는 선**
+  - 상품 영상의 프롬프트는 회전, 푸시인, 오빗, 팬 같은 카메라 움직임만 허용합니다. "닦인다", "정리된다", "전후 비교", 손이나 사람이 쓰는 장면처럼 기능·효과를 연출하면 거부됩니다. 실제로 일어나지 않은 효과를 보여 주는 광고가 되기 때문입니다.
+  - 상황 장면은 특정 상품이 보이지 않게 생성합니다.
+  - 생성된 상품 영상은 모양, 색, 크기가 원본과 같은지 `approve`에서 확인합니다.
+  - AI 장면이 있으면 각 플랫폼의 AI 콘텐츠 표시를 켭니다.
+  - 넣는 상품 이미지의 사용 권리는 제휴 프로그램 약관과 Runway 약관을 확인하세요.
+
+### Runway MCP (Claude Code에서 대화로 생성)
+```bash
+npm run setup:runway-mcp            # 공식 runwayml/runway-api-mcp-server 를 vendor/ 에 받아 빌드
+echo 'export RUNWAYML_API_SECRET=key_xxx' >> ~/.zshrc && source ~/.zshrc
+claude                              # 이 폴더에서 실행 → .mcp.json 의 runway 서버 승인
+```
+처음 몇 편은 MCP로 프롬프트를 이것저것 시험해 보고, 방식이 잡히면 `ai-clip`으로 일괄 생성하는 흐름을 권합니다. MCP로 만든 영상을 쓸 때는 반드시 `clip add`로 종류와 역할을 붙여 등록하세요.
+- 상품 이미지로 만든 영상: `--kind AI_FROM_PRODUCT --role PRODUCT`에 원본 URL, 근거, 프롬프트를 기록합니다. CLI로 등록하려면 `show`로 JSON을 확인한 뒤 등록하는데, `ai-clip`을 쓰면 이 기록이 자동으로 남습니다.
+- 그 외 상황 장면: `--kind AI --role PROBLEM`처럼 등록합니다.
+
+Claude 앱(claude.ai)에서는 Runway가 제공하는 호스팅 MCP 커넥터도 쓸 수 있습니다. 이 경우 비용은 Runway 구독 요금제에서 차감됩니다.
+
+### 스톡 영상 (무료, 보조)
 [Pexels API](https://www.pexels.com/api/) 키를 무료로 발급받아 `.env`의 `PEXELS_API_KEY`에 넣으세요. 이미 다른 쇼츠에 쓴 영상은 자동으로 건너뜁니다.
 
 ## 사용 예
@@ -53,10 +78,11 @@ npm run sss -- new "서랍 칸막이 정리함" --url "<쿠팡파트너스 링�
   --fact "길이 조절 가능" --fact "6칸"                 # 상품 페이지에서 확인한 사실만
 npm run sss -- score 1                                   # 4기준 질문
 npm run sss -- script 1                                  # data/shorts/1/script.json 에서 hookIndex 고르고 [경험 추가] 정리
-npm run sss -- stock 1 "messy kitchen drawer" --role PROBLEM
-npm run sss -- stock 1 "clean modern kitchen" --role CONTEXT --count 2
 npm run sss -- clip add 1 ~/Downloads/상품.jpg --kind PRODUCT_IMAGE --role PRODUCT \
   --source "<상품 페이지 URL>" --proof "쿠팡파트너스 상품 이미지"
+npm run sss -- ai-clip 1 --dry-run                       # 계획·예상 비용만
+npm run sss -- ai-clip 1 --context                       # 상품 모션 2 + 문제 장면 + 분위기 장면 생성
+npm run sss -- stock 1 "clean modern kitchen" --role CONTEXT   # (선택) 무료 스톡으로 보충
 npm run sss -- clip check 1
 npm run sss -- render 1 --speed 1.15
 open data/shorts/1/short-1.mp4

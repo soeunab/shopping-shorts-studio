@@ -39,7 +39,9 @@ import {
   ScriptSchema,
   type Script,
 } from "./script/generate.js";
-import { checkClips, ClipSchema, ROLES, SOURCE_KINDS, type Clip, type Role, type SourceKind } from "./sources/license.js";
+import { AI_KINDS, checkClips, ClipSchema, ROLES, SOURCE_KINDS, type Clip, type Role, type SourceKind } from "./sources/license.js";
+import { checkProductPrompt, estimateCredits, planAiJobs, productImageDataUri, RunwayClient, USD_PER_CREDIT } from "./ai/runway.js";
+import { download as downloadFile } from "./sources/pexels.js";
 import { chooseVideos, download, searchPexels } from "./sources/pexels.js";
 
 try {
@@ -55,6 +57,8 @@ const HELP = `쇼핑쇼츠 스튜디오 (합법 소스 전용 · 정보형 쇼�
   score <id> [--novel] [--solves "해결하는 문제"] [--season] [--category C]   제품 선정 4기준 (옵션 없으면 질문)
   script <id>                              대본 생성 → data/shorts/<id>/script.json (훅 고르기: hookIndex)
   stock <id> "<영어 검색어>" [--role PROBLEM|CONTEXT|HOOK] [--count 3]     Pexels 무료 스톡 자동 받기
+  ai-clip <id> [--products 2] [--no-problem] [--context] [--motion "camera ..."] [--dry-run] [--yes]
+                                           Runway 로 AI 장면 생성: 실제 상품 이미지→카메라 모션, 공감 줄→상황 영상 (생성 전 비용 확인)
   clip add <id> <파일> --kind ${Object.keys(SOURCE_KINDS).join("|")} --role ${Object.keys(ROLES).join("|")} [--source URL] [--proof 근거]
   clip check <id>                          소스 라이선스·역할 점검
   render <id> [--speed 1.15] [--voice 음성파일] [--sw]   음성·한 줄 자막·2~3초 컷으로 1080x1920 mp4
@@ -66,7 +70,7 @@ const HELP = `쇼핑쇼츠 스튜디오 (합법 소스 전용 · 정보형 쇼�
 기록
   track <id> --platform ${PLATFORMS.join("|")} [--views N] [--clicks N] [--orders N] [--commission 원] [--source S] [--minutes 제작분]
   track-channel --platform YOUTUBE|INSTAGRAM|... [--followers N] [--views90 N]
-  report                                   성과·시간당 수익·수익창출 조건 진행률`;
+  report                                   성과·시간당 수익·AI 비용·수익창출 조건 진행률`;
 
 function need(id: string | undefined): number {
   const n = Number(id);
@@ -217,6 +221,71 @@ async function main() {
       updateShort(db, s.id, { clips });
       return;
     }
+    case "ai-clip": {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+          products: { type: "string" },
+          "no-problem": { type: "boolean" },
+          context: { type: "boolean" },
+          motion: { type: "string" },
+          "dry-run": { type: "boolean" },
+          yes: { type: "boolean" },
+        },
+      });
+      const s = loadShort(db, need(positionals[0]));
+      const script = currentScript(s);
+      const clips = s.clips as Clip[];
+      const productImages = clips.filter((c) => c.kind === "PRODUCT_IMAGE");
+      if (values.motion) {
+        const bad = checkProductPrompt(values.motion);
+        if (bad.length) throw new Error(bad.join("\n"));
+      }
+      if (!productImages.length && Number(values.products ?? 2) > 0) {
+        console.log("⚠️ 실제 상품 이미지(PRODUCT_IMAGE)가 없어 상품 영상은 건너뜁니다. clip add ... --kind PRODUCT_IMAGE --role PRODUCT 로 먼저 추가하세요.");
+      }
+      const jobs = planAiJobs(script, productImages.map((c) => c.file), {
+        products: Number(values.products ?? 2),
+        problem: !values["no-problem"],
+        context: !!values.context,
+        customMotion: values.motion,
+      });
+      if (!jobs.length) throw new Error("만들 장면이 없어요.");
+      const credits = estimateCredits(jobs);
+      console.log(`생성 계획 (${jobs.length}개):`);
+      for (const j of jobs) console.log(`  ${ROLES[j.role].padEnd(6)} ${j.model} ${j.duration}초 ${j.type === "image_to_video" ? `← ${path.basename(j.baseFile!)}` : ""}\n      ${j.prompt}`);
+      console.log(credits === null ? "예상 비용: 요금표에 없는 모델이 있어 계산할 수 없어요(Runway 가격표 확인)." : `예상 비용: ${credits} 크레딧 ≈ $${(credits * USD_PER_CREDIT).toFixed(2)}`);
+      if (values["dry-run"]) return;
+      if (!values.yes && !(await confirm("Runway 크레딧을 써서 생성할까요?"))) return console.log("취소했어요.");
+
+      const client = new RunwayClient();
+      const dir = path.join(shortDir(s.id), "clips");
+      mkdirSync(dir, { recursive: true });
+      const added: Clip[] = [];
+      let spent = 0;
+      for (const [i, j] of jobs.entries()) {
+        const base = j.baseFile ? productImages.find((c) => c.file === j.baseFile) : undefined;
+        const image = base ? await productImageDataUri(base.file, path.join(dir, `runway-input-${i}.jpg`)) : undefined;
+        console.log(`[${i + 1}/${jobs.length}] ${ROLES[j.role]} 생성 중…`);
+        const taskId = await client.submit(j, image);
+        const url = await client.wait(taskId);
+        const dest = path.join(dir, `${clips.length + added.length + 1}-runway-${j.role.toLowerCase()}-${taskId.slice(0, 8)}.mp4`);
+        await downloadFile(url, dest);
+        spent += (estimateCredits([j]) ?? 0);
+        const clip = ClipSchema.parse(
+          base
+            ? { file: dest, kind: "AI_FROM_PRODUCT", role: "PRODUCT", sourceUrl: base.sourceUrl, proof: base.proof, derivedFrom: base.file, prompt: j.prompt, model: j.model, note: `Runway ${taskId}` }
+            : { file: dest, kind: "AI", role: j.role, prompt: j.prompt, model: j.model, note: `Runway ${taskId}` },
+        );
+        added.push(clip);
+        // 한 편씩 저장 — 중간에 실패해도 이미 만든 장면과 비용 기록은 남깁니다.
+        updateShort(db, s.id, { clips: [...clips, ...added], aiCredits: s.aiCredits + spent });
+        console.log(`  ✅ ${dest}`);
+      }
+      console.log(`✅ ${added.length}개 추가 · 약 ${spent} 크레딧($${(spent * USD_PER_CREDIT).toFixed(2)}) — 상품 영상은 모양이 원본과 같은지 꼭 확인하세요. 다음: clip check ${s.id} → render ${s.id}`);
+      return;
+    }
     case "clip": {
       const [sub, idArg, ...more] = rest;
       const s = loadShort(db, need(idArg));
@@ -306,14 +375,19 @@ async function main() {
     case "approve": {
       const s = loadShort(db, need(rest[0]));
       if (!["EXPORTED", "PRIVATE", "RENDERED"].includes(s.status)) throw new Error(`렌더·내보내기 후에 검수할 수 있어요(현재 ${s.status}).`);
-      const hasAi = (s.clips as Clip[]).some((c) => c.kind === "AI");
+      const hasAi = (s.clips as Clip[]).some((c) => AI_KINDS.includes(c.kind));
+      const hasAiProduct = (s.clips as Clip[]).some((c) => c.kind === "AI_FROM_PRODUCT");
       console.log(`올리기 전 검수 — ${s.videoPath}
   1. 모든 장면이 스톡·AI·상품 이미지 등 쓸 수 있는 소스인가요? (다른 사람 영상 없음)
   2. '실제 상품' 장면이 진짜 그 상품인가요? (AI·스톡을 상품처럼 보여 주지 않음)
   3. 대사에 사실과 다른 내용, 지어낸 사용 경험, 과장이 없나요?
   4. 화면 상단 광고 표기가 보이고, 캡션 첫 줄에 "${COUPANG_DISCLOSURE}" 가 있나요?
-  5. 각 앱의 광고 표시(유료 프로모션·브랜드 콘텐츠)를 켤 준비가 됐나요?${hasAi ? "\n  6. AI 이미지가 들어 있어요 — 각 앱의 'AI 생성 콘텐츠' 표시를 켜세요." : ""}
-  ${hasAi ? 7 : 6}. 프로필 링크·댓글 키워드 DM 이 이 제품 링크로 연결되나요? (${exportDir(s.id)}/links.txt)`);
+  5. 각 앱의 광고 표시(유료 프로모션·브랜드 콘텐츠)를 켤 준비가 됐나요?
+  6. 프로필 링크·댓글 키워드 DM 이 이 제품 링크로 연결되나요? (${exportDir(s.id)}/links.txt)${
+    hasAiProduct
+      ? "\n  7. AI 로 움직인 상품 영상: 상품 모양·색·크기·부품이 원본 이미지와 같나요? 상품이 무언가를 해내는(닦기·정리 등) 연출이 없나요?"
+      : ""
+  }${hasAi ? "\n  8. AI 장면이 들어 있어요 — 각 앱의 'AI 생성 콘텐츠' 표시(유튜브: 변경·합성 콘텐츠, 인스타: AI 정보)를 켜세요." : ""}`);
       if (!(await confirm("모두 확인했나요?"))) return console.log("승인하지 않았어요.");
       updateShort(db, s.id, { status: "APPROVED" });
       console.log(`✅ 승인. 폰으로 올린 뒤: npm run sss -- posted ${s.id}`);
@@ -341,7 +415,7 @@ async function main() {
         title: `${script.titles[0]} #shorts`,
         description: [COUPANG_DISCLOSURE, "", "제품 정보는 채널 프로필 링크에서 확인하세요.", "", script.hashtags.join(" ")].join("\n"),
         tags: script.hashtags.map((h) => h.replace(/^#/, "")),
-        syntheticMedia: (s.clips as Clip[]).some((c) => c.kind === "AI"),
+        syntheticMedia: (s.clips as Clip[]).some((c) => AI_KINDS.includes(c.kind)),
       });
       updateShort(db, s.id, { remoteUrl: r.url, status: "PRIVATE" });
       console.log(`✅ 비공개 업로드: ${r.url}\n유튜브 스튜디오에서 확인 후: npm run sss -- approve ${s.id}`);
@@ -409,7 +483,7 @@ async function main() {
       }
       const s = summarize(rows);
       console.log(
-        `\n공개 ${s.published}/${s.count}편 · 조회수 중앙값 ${s.medianViews} · 클릭률 ${(s.ctr * 100).toFixed(2)}% · 누적 수수료 ${s.commission.toLocaleString()}원 · 편당 ${s.perShort.toLocaleString()}원 · 제작 ${s.hours.toFixed(1)}시간 · 시간당 ${s.perHour.toLocaleString()}원`,
+        `\n공개 ${s.published}/${s.count}편 · 조회수 중앙값 ${s.medianViews} · 클릭률 ${(s.ctr * 100).toFixed(2)}% · 누적 수수료 ${s.commission.toLocaleString()}원 · 편당 ${s.perShort.toLocaleString()}원 · 제작 ${s.hours.toFixed(1)}시간 · 시간당 ${s.perHour.toLocaleString()}원 · AI 비용 $${s.aiUsd.toFixed(2)}`,
       );
       const ch = latestChannel(db);
       for (const c of ch) console.log(`${c.platform} ${c.date}: 팔로워/구독자 ${c.followers.toLocaleString()} · 90일 조회 ${c.views90d.toLocaleString()}`);

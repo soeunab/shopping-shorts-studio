@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { claudeBin } from "./llm/claudeCode.js";
 import { run } from "./media/exec.js";
 import { pickSayVoice, providerFromEnv } from "./media/tts.js";
@@ -51,6 +52,20 @@ export async function doctor(): Promise<Check[]> {
   });
 
   checks.push({ name: "스톡: Pexels 키", ok: !!process.env.PEXELS_API_KEY, detail: "PEXELS_API_KEY (stock 명령)", fix: "https://www.pexels.com/api/ 에서 무료 발급", optional: true });
+  checks.push({
+    name: "AI 영상: Runway 키",
+    ok: !!process.env.RUNWAYML_API_SECRET,
+    detail: "RUNWAYML_API_SECRET (ai-clip 명령·Runway MCP, 개발자 크레딧 유료)",
+    fix: "https://dev.runwayml.com 에서 키 발급·결제 설정",
+    optional: true,
+  });
+  checks.push({
+    name: "Runway MCP (Claude Code)",
+    ok: existsSync("vendor/runway-api-mcp-server/build/index.js"),
+    detail: ".mcp.json → vendor/runway-api-mcp-server",
+    fix: "npm run setup:runway-mcp",
+    optional: true,
+  });
   checks.push({ name: "채널 카테고리", ok: true, detail: channelCategory() });
 
   const bin = claudeBin();

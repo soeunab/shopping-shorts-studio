@@ -28,6 +28,8 @@ export type ShortRow = {
   remoteUrl: string | null;
   /** 제작에 쓴 시간(분) — 시간당 수익 계산용 */
   minutes: number;
+  /** AI 영상 생성에 쓴 크레딧(Runway 1크레딧 = $0.01) */
+  aiCredits: number;
   createdAt: string;
 };
 
@@ -58,6 +60,7 @@ function toRow(r: Raw): ShortRow {
     videoPath: (r.video_path as string | null) ?? null,
     remoteUrl: (r.remote_url as string | null) ?? null,
     minutes: Number(r.minutes ?? 0),
+    aiCredits: Number(r.ai_credits ?? 0),
     createdAt: String(r.created_at),
   };
 }
@@ -112,6 +115,7 @@ export function openDb(file: string = dbPath()): DatabaseSync {
   ensureColumn(db, "shorts", "naver_url", "TEXT");
   ensureColumn(db, "shorts", "scores", "TEXT");
   ensureColumn(db, "shorts", "minutes", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "shorts", "ai_credits", "INTEGER NOT NULL DEFAULT 0");
 
   // 초기 버전 metrics(플랫폼 구분 없음) → 플랫폼별 기록으로 옮김
   const hasMetrics = columns(db, "metrics").length > 0;
@@ -143,7 +147,7 @@ export function listShorts(db: DatabaseSync): ShortRow[] {
   return (db.prepare("SELECT * FROM shorts ORDER BY id DESC").all() as Raw[]).map(toRow);
 }
 
-export type ShortPatch = Partial<Pick<ShortRow, "status" | "script" | "clips" | "videoPath" | "remoteUrl" | "scores" | "minutes">>;
+export type ShortPatch = Partial<Pick<ShortRow, "status" | "script" | "clips" | "videoPath" | "remoteUrl" | "scores" | "minutes" | "aiCredits">>;
 
 export function updateShort(db: DatabaseSync, id: number, patch: ShortPatch): ShortRow {
   const sets: string[] = [];
@@ -156,6 +160,7 @@ export function updateShort(db: DatabaseSync, id: number, patch: ShortPatch): Sh
   if (patch.videoPath !== undefined) set("video_path", patch.videoPath);
   if (patch.remoteUrl !== undefined) set("remote_url", patch.remoteUrl);
   if (patch.minutes !== undefined) set("minutes", patch.minutes);
+  if (patch.aiCredits !== undefined) set("ai_credits", patch.aiCredits);
   if (sets.length) db.prepare(`UPDATE shorts SET ${sets.join(", ")} WHERE id = ?`).run(...vals, id);
   const row = getShort(db, id);
   if (!row) throw new Error(`쇼츠 #${id} 를 찾을 수 없어요.`);
@@ -220,11 +225,11 @@ export function latestChannel(db: DatabaseSync): ChannelRow[] {
   ).map((r) => ({ ...r, followers: Number(r.followers), views90d: Number(r.views90d) }));
 }
 
-export type ReportRow = { id: number; productName: string; status: string; minutes: number; views: number; clicks: number; orders: number; commission: number; byPlatform: Partial<Record<Platform, number>> };
+export type ReportRow = { id: number; productName: string; status: string; minutes: number; aiCredits: number; views: number; clicks: number; orders: number; commission: number; byPlatform: Partial<Record<Platform, number>> };
 
 /** 쇼츠별 플랫폼 최신 기록을 합산 */
 export function report(db: DatabaseSync): ReportRow[] {
-  const shorts = db.prepare("SELECT id, product_name, status, minutes FROM shorts ORDER BY id").all() as Raw[];
+  const shorts = db.prepare("SELECT id, product_name, status, minutes, ai_credits FROM shorts ORDER BY id").all() as Raw[];
   const latest = db
     .prepare(
       `SELECT m.* FROM metrics m
@@ -241,6 +246,7 @@ export function report(db: DatabaseSync): ReportRow[] {
       productName: String(s.product_name),
       status: String(s.status),
       minutes: Number(s.minutes ?? 0),
+      aiCredits: Number(s.ai_credits ?? 0),
       views: sum("views"),
       clicks: sum("clicks"),
       orders: sum("orders"),
@@ -250,7 +256,18 @@ export function report(db: DatabaseSync): ReportRow[] {
   });
 }
 
-export type Summary = { count: number; published: number; medianViews: number; ctr: number; commission: number; perShort: number; hours: number; perHour: number };
+export type Summary = {
+  count: number;
+  published: number;
+  medianViews: number;
+  ctr: number;
+  commission: number;
+  perShort: number;
+  hours: number;
+  perHour: number;
+  /** AI 생성 비용(달러) */
+  aiUsd: number;
+};
 
 /** Phase 0 판단용 요약: 편당 조회수 중앙값, 클릭률(클릭/조회), 누적 수수료, 시간당 수익 */
 export function summarize(rows: ReportRow[]): Summary {
@@ -270,6 +287,7 @@ export function summarize(rows: ReportRow[]): Summary {
     perShort: pub.length ? Math.round(commission / pub.length) : 0,
     hours,
     perHour: hours ? Math.round(commission / hours) : 0,
+    aiUsd: rows.reduce((a, r) => a + r.aiCredits, 0) * 0.01,
   };
 }
 
