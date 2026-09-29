@@ -1,0 +1,23 @@
+{
+  "name": "shopping-shorts-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "쇼핑쇼츠(쿠팡파트너스·네이버 쇼핑커넥트) 제작·검수·업로드 스튜디오 — 합법 소스 전용",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "sss": "node --disable-warning=ExperimentalWarning --import tsx src/cli.ts",
+    "doctor": "node --disable-warning=ExperimentalWarning --import tsx src/cli.ts doctor",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}

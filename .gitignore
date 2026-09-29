@@ -1,0 +1,9 @@
+node_modules/
+data/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+# 유튜브 OAuth 토큰 등 비밀값
+secrets/
